@@ -1,0 +1,285 @@
+
+openapi: 3.1.0
+info:
+  title: Proxy Gateway Manager API
+  version: 1.1.0
+servers:
+  - url: http://127.0.0.1:8080
+security:
+  - bearerAuth: []
+paths:
+  /v1/health:
+    get:
+      summary: Liveness probe
+      responses:
+        "200": { description: ok }
+  /v1/auth/login:
+    post:
+      summary: Login and get JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+  /v1/proxies:
+    get:
+      summary: List proxies
+      parameters:
+        - in: query
+          name: status
+          schema: { $ref: "#/components/schemas/ProxyStatus" }
+      responses:
+        "200":
+          description: list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Proxy" }
+    post:
+      summary: Create proxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProxyCreate" }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Proxy" }
+  /v1/proxies/{id}:
+    get:
+      summary: Get proxy
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Proxy" }
+    put:
+      summary: Update proxy (health-check then store)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProxyUpdate" }
+      responses:
+        "200": { description: ok }
+    delete:
+      summary: Delete proxy
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: deleted }
+  /v1/proxies/check:
+    post:
+      summary: Ad-hoc health check
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+      responses:
+        "200":
+          description: telemetry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyTelemetry" }
+  /v1/clients:
+    get:
+      summary: List clients
+      responses:
+        "200":
+          description: list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Client" }
+    post:
+      summary: Create client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClientCreate" }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Client" }
+  /v1/mappings:
+    get:
+      summary: List mappings (joined telemetry)
+      responses:
+        "200":
+          description: list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MappingView" }
+    post:
+      summary: Create mapping (health gate)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MappingCreate" }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MappingView" }
+  /v1/mappings/{id}:
+    put:
+      summary: Update mapping (health gate)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MappingUpdate" }
+      responses:
+        "200": { description: ok }
+    delete:
+      summary: Delete mapping
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: deleted }
+  /v1/apply:
+    post:
+      summary: Ask agent to reconcile now
+      responses:
+        "202": { description: enqueued }
+  /v1/events:
+    get:
+      summary: Server-Sent Events stream for UI
+      responses:
+        "200":
+          description: text/event-stream
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ProxyStatus:
+      type: string
+      enum: [OK, DEGRADED, DOWN]
+    MappingState:
+      type: string
+      enum: [APPLIED, PENDING, FAILED]
+    ProxyBase:
+      type: object
+      required: [type, host, port]
+      properties:
+        label: { type: string }
+        type: { type: string, enum: [http, socks5] }
+        host: { type: string }
+        port: { type: integer }
+        username: { type: string, nullable: true }
+        password: { type: string, nullable: true }
+        enabled: { type: boolean, default: true }
+    ProxyCreate:
+      allOf: [{ $ref: "#/components/schemas/ProxyBase" }]
+    ProxyUpdate:
+      allOf: [{ $ref: "#/components/schemas/ProxyBase" }]
+    Proxy:
+      allOf:
+        - $ref: "#/components/schemas/ProxyBase"
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string }
+            status: { $ref: "#/components/schemas/ProxyStatus" }
+            latency_ms: { type: integer, nullable: true }
+            exit_ip: { type: string, nullable: true }
+            last_checked_at: { type: string, format: date-time, nullable: true }
+    ProxyTelemetry:
+      type: object
+      properties:
+        status: { $ref: "#/components/schemas/ProxyStatus" }
+        latency_ms: { type: integer, nullable: true }
+        exit_ip: { type: string, nullable: true }
+        checked_at: { type: string, format: date-time }
+    ClientBase:
+      type: object
+      required: [ip_cidr]
+      properties:
+        ip_cidr: { type: string, example: "192.168.2.3/32" }
+        note: { type: string, nullable: true }
+        enabled: { type: boolean, default: true }
+    ClientCreate:
+      allOf: [{ $ref: "#/components/schemas/ClientBase" }]
+    Client:
+      allOf:
+        - $ref: "#/components/schemas/ClientBase"
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string }
+    MappingCreate:
+      type: object
+      required: [client_id, proxy_id, protocol]
+      properties:
+        client_id: { type: string }
+        proxy_id: { type: string }
+        protocol: { type: string, enum: [http, socks5] }
+    MappingUpdate:
+      type: object
+      properties:
+        proxy_id: { type: string }
+        protocol: { type: string, enum: [http, socks5] }
+    MappingView:
+      type: object
+      properties:
+        id: { type: string }
+        client: { $ref: "#/components/schemas/Client" }
+        proxy: { $ref: "#/components/schemas/Proxy" }
+        state: { $ref: "#/components/schemas/MappingState" }
+        local_redirect_port: { type: integer }

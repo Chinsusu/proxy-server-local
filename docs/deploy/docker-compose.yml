@@ -1,0 +1,34 @@
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_PASSWORD: pgw
+      POSTGRES_USER: pgw
+      POSTGRES_DB: pgw
+    volumes: [ "pgdata:/var/lib/postgresql/data" ]
+  nats:
+    image: nats:2
+    command: -js
+  pgw-api:
+    image: ghcr.io/your-org/pgw-api:latest
+    env_file: [ ./pgw.env ]
+    depends_on: [ postgres, nats ]
+    ports: [ "8080:8080" ]
+  pgw-ui:
+    image: ghcr.io/your-org/pgw-ui:latest
+    env_file: [ ./pgw.env ]
+    depends_on: [ pgw-api ]
+    ports: [ "8443:8443" ]
+  pgw-agent:
+    image: ghcr.io/your-org/pgw-agent:latest
+    env_file: [ ./pgw.env ]
+    network_mode: host
+    cap_add: [ "NET_ADMIN" ]
+    depends_on: [ pgw-api ]
+  pgw-health:
+    image: ghcr.io/your-org/pgw-health:latest
+    env_file: [ ./pgw.env ]
+    depends_on: [ pgw-api ]
+volumes:
+  pgdata: {}

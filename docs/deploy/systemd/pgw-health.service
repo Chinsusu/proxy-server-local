@@ -1,0 +1,16 @@
+
+[Unit]
+Description=PGW Health
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pgw
+Group=pgw
+EnvironmentFile=/etc/pgw/pgw.env
+ExecStart=/usr/local/bin/pgw-health
+Restart=always
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
