@@ -298,7 +298,6 @@ func main() {
 
 			httpx.JSON(w, 201, mv)
 
-			w.WriteHeader(405)
 		}
 
 	})
@@ -363,6 +362,10 @@ func main() {
 
 	// DELETE /v1/mappings/{id} (hard delete + cleanup)
 	http.HandleFunc("/v1/mappings/", func(w http.ResponseWriter, r *http.Request) {
+		// Skip exact /v1/mappings to avoid conflict with main handler
+		if r.URL.Path == "/v1/mappings" {
+			return
+		}
 		if r.Method != http.MethodDelete {
 			w.WriteHeader(405)
 			return
