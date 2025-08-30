@@ -71,6 +71,7 @@ func main() {
 			})
 			httpx.JSON(w, 200, ps)
 		case http.MethodPost:
+			logging.Info.Printf("[DEBUG] POST /v1/mappings called")
 			var p types.Proxy
 			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 				httpx.JSON(w, 400, map[string]string{"error": "bad json"})
@@ -164,6 +165,7 @@ func main() {
 			httpx.JSON(w, 200, st.ListClients())
 
 		case http.MethodPost:
+			logging.Info.Printf("[DEBUG] POST /v1/mappings called")
 			var c types.Client
 			if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 				httpx.JSON(w, 400, map[string]string{"error": "bad json"})
@@ -229,11 +231,20 @@ func main() {
 			})
 			httpx.JSON(w, 200, views)
 		case http.MethodPost:
+			logging.Info.Printf("[DEBUG] POST /v1/mappings called")
 			var m types.Mapping
 			if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 				httpx.JSON(w, 400, map[string]string{"error": "bad json"})
 				return
 			}
+
+				// Enforce unique proxy mapping: one mapping per proxy
+				for _, mv := range st.ListMappings() {
+					if mv.Proxy.ID == m.ProxyID {
+						httpx.JSON(w, 409, map[string]string{"error": "proxy already mapped"})
+						return
+					}
+				}
 			if m.Protocol == "" {
 				m.Protocol = "http"
 			}
@@ -260,6 +271,7 @@ func main() {
 			if mv.Proxy.Type != "http" {
 				_ = st.UpdateMappingState(mv.ID, "FAILED", mv.LocalRedirectPort)
 				mv.State = "FAILED"
+			logging.Info.Printf("[DEBUG] Sending JSON response for mapping %s", mv.ID)
 				httpx.JSON(w, 201, mv)
 				return
 			}
@@ -270,6 +282,7 @@ func main() {
 				st.SetProxyTelemetry(mv.Proxy.ID, types.StatusDown, 0, "")
 				_ = st.UpdateMappingState(mv.ID, "FAILED", mv.LocalRedirectPort)
 				mv.State = "FAILED"
+			logging.Info.Printf("[DEBUG] Sending JSON response for mapping %s", mv.ID)
 				httpx.JSON(w, 201, mv)
 				return
 			}
@@ -296,6 +309,7 @@ func main() {
 				}
 			}(mv)
 
+			logging.Info.Printf("[DEBUG] Sending JSON response for mapping %s", mv.ID)
 			httpx.JSON(w, 201, mv)
 
 		}
