@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PGW Proxy Management</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-content">
+      <div class="logo">🔒 Proxy Gateway</div>
+      <nav class="nav">
+        <a href="/" class="nav-link">Dashboard</a>
+        <a href="/proxies" class="nav-link">Proxies</a>
+        <a href="/manage" class="nav-link">Mappings</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- Alerts container -->
+    <div id="alerts"></div>
+
+    <!-- Add New Proxy -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Add New Proxy Server</h3>
+      </div>
+      <div class="card-content">
+        <form id="form-proxy" style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+          <div style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 100px;">
+            <label class="form-label">Type</label>
+            <select name="type" class="form-select" required>
+              <option value="http">HTTP</option>
+              <option value="https">HTTPS</option>
+            </select>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 160px;">
+            <label class="form-label">Host</label>
+            <input type="text" name="host" class="form-input" placeholder="proxy.example.com" required>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 100px;">
+            <label class="form-label">Port</label>
+            <input type="number" name="port" class="form-input" placeholder="8080" required>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 120px;">
+            <label class="form-label">Username</label>
+            <input type="text" name="username" class="form-input" placeholder="Optional">
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 120px;">
+            <label class="form-label">Password</label>
+            <input type="password" name="password" class="form-input" placeholder="Optional">
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 0.5rem;"><label class="form-label" style="opacity: 0; pointer-events: none;">&nbsp;</label>
+            <button type="submit" class="btn btn-primary">Add Proxy</button>
+          </div>
+        </form>
+
+        <!-- Bulk import -->
+        <div style="margin-top: 1rem; display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: end;">
+          <div style="display:flex; flex-direction:column; gap:0.5rem;">
+            <label class="form-label">Bulk import (IP:PORT:USER:PASSWORD, one per line)</label>
+            <textarea id="import-proxies" class="form-input" rows="4" placeholder="192.0.2.10:8080:alice:s3cret
+198.51.100.22:3128:bob:pass123"></textarea>
+            <small class="form-help">Format fixed to HTTP proxies. Invalid lines will be skipped.</small>
+          </div>
+          <div>
+            <button id="btn-import-proxies" class="btn btn-primary">Import</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Proxy Management Actions -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Proxy Actions</h3>
+      </div>
+      <div class="card-content">
+        <div class="flex gap-2">
+          <button id="btn-health-all" class="btn btn-primary">
+            ⚡ Health Check All
+          </button>
+          <button id="btn-refresh" class="btn btn-secondary">
+            🔄 Refresh
+          </button>
+          <button class="btn btn-warning" onclick="pgw.exportProxies()">
+            📊 Export List
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Proxy Servers List -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Proxy Servers</h3>
+        <div class="card-actions">
+          <span class="text-muted" id="proxy-count">— proxies</span>
+        </div>
+      </div>
+      <div class="table-container">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Type</th>
+              <th>Address</th>
+              <th>Status</th>
+              <th>Latency</th>
+              <th>Exit IP</th>
+              <th>Last Check</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-proxies">
+            <tr>
+              <td colspan="8" class="text-center">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

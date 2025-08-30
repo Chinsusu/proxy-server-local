@@ -1,3 +1,6 @@
+SHELL := /bin/bash
+export PATH := /usr/local/go/bin:/snap/bin:$(PATH)
+
 
 BIN_DIR=bin
 CMDS=api ui agent health fwd

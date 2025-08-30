@@ -60,18 +60,23 @@ func main() {
 	cfg := loadCfg()
 
 	http.HandleFunc("/agent/reconcile", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost && r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
+		switch r.Method {
+		case http.MethodGet, http.MethodPost, http.MethodHead:
+			if r.Method != http.MethodHead {
+				if err := reconcile(cfg); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				_, _ = w.Write([]byte("ok"))
+				return
+			}
+			// HEAD: chỉ trả status
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-		if err := reconcile(cfg); err != nil {
-			logging.Error.Println("reconcile error:", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintln(w, err.Error())
-			return
-		}
-		fmt.Fprintln(w, "ok")
 	})
+
 
 	// tick định kỳ
 	go func() {
@@ -109,8 +114,25 @@ func reconcile(cfg cfgAgent) error {
 	script := renderRules(cfg, mvs)
 
 	// Add mới tất cả trong 1 shot
+	// Determine the set of mapping IDs that were considered (have valid local port)
+	type item struct{ id string; port int }
+	selected := []item{}
+	for _, mv := range mvs {
+		if mv.LocalRedirectPort > 0 {
+			selected = append(selected, item{id: mv.ID, port: mv.LocalRedirectPort})
+		}
+	}
+
 	if err := runCmdWithInput(cfg.NftBinary, script); err != nil {
+		// mark failed for all selected mappings
+		for _, it := range selected {
+			_ = updateMappingState(cfg.APIBase, it.id, "FAILED", it.port)
+		}
 		return fmt.Errorf("nft apply: %w", err)
+	}
+	// success → mark applied
+	for _, it := range selected {
+		_ = updateMappingState(cfg.APIBase, it.id, "APPLIED", it.port)
 	}
 	return nil
 }
@@ -249,9 +271,29 @@ func runCmdWithInput(bin string, script string) error {
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
+
 	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("nft -f - failed: %v; output=%s", err, out.String())
+	}
+	return nil
+}
+
+// updateMappingState calls API to set mapping state.
+func updateMappingState(apiBase, id, state string, port int) error {
+	body := struct{
+		State string `json:"state"`
+		LocalPort int `json:"local_redirect_port"`
+	}{State: state, LocalPort: port}
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest(http.MethodPost, strings.TrimRight(apiBase, "/")+"/v1/mappings/state/"+id,  bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil { return err }
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		bb, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("api %s: %s", resp.Status, string(bb))
 	}
 	return nil
 }

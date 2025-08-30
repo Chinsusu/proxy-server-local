@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PGW Dashboard</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-content">
+      <div class="logo">🔒 Proxy Gateway</div>
+      <nav class="nav">
+        <a href="/" class="nav-link">Dashboard</a>
+        <a href="/proxies" class="nav-link">Proxies</a>
+        <a href="/manage" class="nav-link">Mappings</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- Alerts container -->
+    <div id="alerts"></div>
+
+    <!-- Loading indicator -->
+    <div id="loading-indicator" class="loading hidden">
+      <div class="spinner"></div>
+      Loading...
+    </div>
+
+    <!-- Stats overview -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value" id="stat-proxies">—</div>
+        <div class="stat-label">Total Proxies</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-proxies-ok">—</div>
+        <div class="stat-label">Healthy Proxies</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-mappings">—</div>
+        <div class="stat-label">Active Mappings</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="last-refresh">—</div>
+        <div class="stat-label">Last Updated</div>
+      </div>
+    </div>
+
+    <!-- Quick actions -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Quick Actions</h3>
+        <div class="card-actions">
+          <button id="btn-refresh" class="btn btn-secondary">
+            🔄 Refresh
+          </button>
+        </div>
+      </div>
+      <div class="card-content">
+        <div class="flex gap-2">
+          <button id="btn-health-all" class="btn btn-primary">
+            ⚡ Health Check All
+          </button>
+          <button id="btn-reconcile" class="btn btn-success">
+            🔧 Apply Rules
+          </button>
+          <a href="/proxies" class="btn btn-primary">
+            ➕ Add Proxy
+          </a>
+          <a href="/manage" class="btn btn-secondary">
+            🔗 Manage Mappings
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- System Status -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">System Overview</h3>
+      </div>
+      <div class="card-content">
+        <div class="system-status">
+          <div class="status-item">
+            <span class="status-label">API Service:</span>
+            <span class="badge badge-success" id="api-status">Running</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Agent Service:</span>
+            <span class="badge badge-success" id="agent-status">Running</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Forwarder Service:</span>
+            <span class="badge badge-success" id="fwd-status">Running</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Proxy Status Summary</h3>
+      </div>
+      <div class="table-container">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Proxy</th>
+              <th>Status</th>
+              <th>Latency</th>
+              <th>Exit IP</th>
+              <th>Last Check</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-proxy-summary">
+            <tr>
+              <td colspan="5" class="text-center">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

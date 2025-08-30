@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Proxy Gateway Manager</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+<header class="topbar">
+  <div class="brandwrap">
+    <div class="logo">🌐</div>
+    <div class="titles">
+      <div class="title">Proxy Gateway Manager</div>
+      <div class="subtitle">Advanced Proxy Gateway Control Panel v1.1</div>
+    </div>
+  </div>
+  <nav class="tabs">
+    <button class="tabbtn active" data-tab="dashboard"><span>Dashboard</span></button>
+    <button class="tabbtn" data-tab="mapping"><span>Proxy Mapping</span></button>
+    <button class="tabbtn" data-tab="config"><span>Configuration</span></button>
+    <button class="tabbtn" data-tab="auth"><span>Authentication</span></button>
+  </nav>
+  <div id="banner" class="banner" style="display:none"></div>
+</header>
+
+<main class="container">
+  <section id="dashboard" class="tab active">
+    <div class="grid kpi">
+      <div class="card kpi-card"><div class="kpi-title">Proxies</div><div class="kpi-value" id="stat-proxies">—</div></div>
+      <div class="card kpi-card"><div class="kpi-title">Mappings</div><div class="kpi-value" id="stat-mappings">—</div></div>
+      <div class="card kpi-card"><div class="kpi-title">Last refresh</div><div class="kpi-value" id="stat-last">—</div></div>
+    </div>
+    <div class="section-head">
+      <h2>Proxies</h2>
+      <div class="actions">
+        <button id="btn-health-all" class="btn btn-outline">Health-check all</button>
+        <button id="btn-refresh" class="btn">Refresh</button>
+      </div>
+    </div>
+    <div class="card table-card"><div class="tablewrap" id="proxies">—</div></div>
+
+    <div class="section-head">
+      <h2>Mappings</h2>
+      <div class="actions"><button id="btn-reconcile" class="btn">Apply rules</button></div>
+    </div>
+    <div class="card table-card"><div class="tablewrap" id="mappings">—</div></div>
+  </section>
+
+  <section id="mapping" class="tab">
+    <h2 class="mb8">Proxy Mapping</h2>
+    <div class="grid two">
+      <div class="card">
+        <div class="card-head"><h3>Add Proxy</h3></div>
+        <form id="form-proxy" class="form grid two">
+          <label>Type
+            <select name="type">
+              <option value="http">HTTP</option>
+              <option value="socks5">SOCKS5</option>
+            </select>
+          </label>
+          <label>Host <input type="text" name="host" required placeholder="proxy.example.com"/></label>
+          <label>Port <input type="number" name="port" required min="1" max="65535" value="8080"/></label>
+          <label>Username <input type="text" name="username" placeholder="Optional"/></label>
+          <label>Password <input type="password" name="password" placeholder="Optional"/></label>
+          <div class="right span2"><button type="submit" class="btn">Add Proxy</button></div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Add New Mapping</h3></div>
+        <form id="form-mapping" class="form grid two">
+          <label>Client CIDR <input type="text" name="cidr" required placeholder="192.168.2.0/24"/></label>
+          <label>Proxy <select id="select-proxy" name="proxy_id"></select></label>
+          <div class="right span2"><button type="submit" class="btn">Add Mapping</button></div>
+        </form>
+      </div>
+    </div>
+    <div class="section-head">
+      <h3>Current mappings</h3>
+      <div class="actions">
+        <button id="btn-reconcile-2" class="btn">Apply rules</button>
+        <button id="btn-refresh-2" class="btn btn-outline">Refresh</button>
+      </div>
+    </div>
+    <div class="card table-card"><div class="tablewrap" id="mappings2">—</div></div>
+  </section>
+
+  <section id="config" class="tab">
+    <div class="card">
+      <div class="card-head"><h3>Configuration</h3></div>
+      <div class="kv"><span>API</span><code id="cfg-api">—</code></div>
+      <div class="kv"><span>Agent</span><code id="cfg-agent">—</code></div>
+    </div>
+  </section>
+
+  <section id="auth" class="tab">
+    <div class="card">
+      <div class="card-head"><h3>Authentication</h3></div>
+      <p>— Placeholder for v1.1.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">© PGW</footer>
+<script src="/app.js"></script>
+</body>
+</html>

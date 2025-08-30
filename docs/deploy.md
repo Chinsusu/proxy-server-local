@@ -109,3 +109,53 @@ sudo nft list table inet pgw_filter
 ss -lntp | grep :15001
 journalctl -u pgw-fwd -f
 ```
+
+## Hành vi mặc định: Auto-apply, per-proxy port và Auto-cleanup
+
+- Tạo mapping (POST /v1/mappings):
+  - Mô hình "1 cổng forwarder ↔ 1 proxy": tất cả client gán cùng proxy sẽ dùng chung một cổng.
+  - API tự gán cổng theo proxy: nếu proxy đã có cổng, tái sử dụng; nếu chưa, chọn cổng trống trong khoảng [PGW_FWD_BASE_PORT..PGW_FWD_MAX_PORT] (mặc định 15001..15999). Có thể cung cấp `local_redirect_port` nhưng sẽ bị từ chối nếu cổng đó đang thuộc proxy khác.
+  - API ghi file cờ `/var/lib/pgw/ports/<port>`, và khi là lần đầu dùng cổng đó, API sẽ `systemctl start pgw-fwd@<port>` (best-effort). Sau đó gọi Agent `reconcile`. Khi cổng `127.0.0.1:<port>` mở và rule nft đã có, mapping được đánh dấu `APPLIED`.
+  - Biến môi trường (tuỳ chọn): `PGW_FWD_BASE_PORT` và `PGW_FWD_MAX_PORT` để điều chỉnh dải cổng tự cấp.
+
+- Xóa mapping (DELETE /v1/mappings/{id}):
+  - API ghi nhận `port` của mapping trước khi xóa; sau khi xóa:
+    - Nếu không còn mapping nào dùng cùng `port` đó, API sẽ xóa file cờ `/var/lib/pgw/ports/<port>` và chạy `systemctl stop pgw-fwd@<port>` (an toàn, no‑op nếu unit không tồn tại).
+    - Luôn gọi Agent `reconcile` để đồng bộ nftables.
+
+- Gợi ý kiểm tra nhanh:
+  - Sau khi tạo mapping: `ls /var/lib/pgw/ports` → thấy tệp ứng với port.
+  - Sau khi xóa mapping cuối cùng dùng port đó: tệp tương ứng biến mất, và `systemctl status pgw-fwd@<port>` sẽ không còn chạy (nếu dùng template unit).
+  - `sudo nft list table ip pgw` và `sudo nft list table inet pgw_filter` phản ánh trạng thái mới.
+
+## Forwarder theo cổng với systemd template (khuyến nghị)
+
+Tạo unit mẫu `/etc/systemd/system/pgw-fwd@.service` để chạy nhiều forwarder song song, mỗi instance lắng nghe một cổng:
+
+```ini
+[Unit]
+Description=PGW Forwarder instance on port %i
+After=network.target
+
+[Service]
+Environment=PGW_FWD_ADDR=:%i
+ExecStart=/usr/local/bin/pgw-fwd
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Khởi chạy ví dụ:
+
+```bash
+sudo systemctl enable --now pgw-fwd@15001
+# Nếu có mapping khác dùng cổng khác:
+sudo systemctl enable --now pgw-fwd@15002
+```
+
+Lưu ý: API sẽ dọn cờ `/var/lib/pgw/ports/<port>` và gọi `systemctl stop pgw-fwd@<port>` khi xoá mapping cuối cùng dùng cổng đó. API cũng sẽ cố gắng `systemctl start pgw-fwd@<port>` khi proxy lần đầu được gán cổng. Bạn vẫn có thể quản lý thủ công các instance nếu muốn.
+
+
+Lưu ý (an toàn): Chỉ apply mapping sau khi kiểm tra health của proxy thành công (OK/DEGRADED).
+Nếu health thất bại, mapping ở trạng thái FAILED và sẽ không khởi động forwarder/cấp rule.

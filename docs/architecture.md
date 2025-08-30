@@ -4,7 +4,7 @@
 
 - **pgw-api (:8080)**: CRUD proxies/clients/mappings; health-check; telemetry.
 - **pgw-agent (:9090/agent)**: gọi API `/v1/mappings/active` → render script `nft` → `nft -f -`.
-- **pgw-fwd (:15001)**: TCP listener; transparent CONNECT (+SNI log ẩn PII); nối upstream proxy.
+- **pgw-fwd (per-port, ví dụ :15001, :15002)**: TCP listener; transparent CONNECT (+SNI log ẩn PII); nối upstream proxy.
 - **pgw-ui (:8081)**: giao diện web; reverse proxy `/api/*`→API, `/agent/*`→Agent.
 
 ## nftables sinh ra
@@ -48,3 +48,12 @@ table inet pgw_filter {
 ## Ràng buộc /32
 
 * API chỉ chấp nhận `ip_cidr` với prefix **= 32**. Nếu người dùng nhập IP không có `/`, API tự chuyển thành `/32`. Nếu prefix `< 32` trả 400.
+
+## Hành vi mặc định (từ v1.1)
+
+- Mô hình 1 cổng ↔ 1 proxy: mọi client gán cùng proxy sẽ dùng chung cổng. API tự gán cổng theo proxy (tái sử dụng nếu có, cấp mới nếu chưa có, trong khoảng 15001..15999 hoặc theo PGW_FWD_BASE_PORT/PGW_FWD_MAX_PORT). Lần đầu dùng cổng, API sẽ cố gắng start `pgw-fwd@<port>`, tạo file cờ `/var/lib/pgw/ports/<port>`, gọi Agent `reconcile`, và đánh dấu **APPLIED** khi hợp lệ.
+- Khi xoá Mapping, API sẽ: nếu không còn mapping nào dùng cùng `port` đó thì xoá file cờ tương ứng và gọi `systemctl stop pgw-fwd@<port>` (an toàn nếu unit không tồn tại). Cuối cùng luôn gọi Agent `reconcile` để đồng bộ nftables.
+
+
+Lưu ý (an toàn): Chỉ apply mapping sau khi kiểm tra health của proxy thành công (OK/DEGRADED).
+Nếu health thất bại, mapping ở trạng thái FAILED và sẽ không khởi động forwarder/cấp rule.

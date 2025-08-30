@@ -1,11 +1,9 @@
-
 package main
 
 import (
-	"time"
-	"os"
 	"github.com/Chinsusu/proxy-server-local/pkg/config"
 	"github.com/Chinsusu/proxy-server-local/pkg/logging"
+	"time"
 )
 
 func main() {

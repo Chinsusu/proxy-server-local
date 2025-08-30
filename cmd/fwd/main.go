@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -36,7 +37,7 @@ func env(k, def string) string {
 }
 
 func resolveUpstream(apiBase string, localPort int) (*upstream, error) {
-	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(apiBase, "/")+"/v1/mappings", nil)
+	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(apiBase, "/")+"/v1/mappings/active", nil)
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -153,12 +154,141 @@ func dialViaProxy(up *upstream, dst *net.TCPAddr) (net.Conn, error) {
 	return pc, nil
 }
 
-func splice(a, b net.Conn) {
-	defer a.Close()
-	defer b.Close()
-	_ = a.SetDeadline(time.Now().Add(10 * time.Minute))
-	_ = b.SetDeadline(time.Now().Add(10 * time.Minute))
-	io.Copy(a, b)
+func parseHTTPHost(b []byte) (string, bool) {
+	// read up to first \r\n\r\n
+	idx := bytes.Index(b, []byte("\r\n\r\n"))
+	head := b
+	if idx >= 0 {
+		head = b[:idx]
+	}
+	// first line must look like "GET / HTTP/1.1" etc, not strict
+	if !bytes.Contains(head, []byte(" HTTP/")) {
+		return "", false
+	}
+	for _, line := range bytes.Split(head, []byte("\r\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		// case-insensitive "Host:"
+		if len(line) >= 5 && (line[0] == 'H' || line[0] == 'h') && bytes.HasPrefix(bytes.ToLower(line), []byte("host:")) {
+			v := strings.TrimSpace(string(line[5:]))
+			v = strings.TrimLeft(v, ": ")
+			if v != "" {
+				// strip port if any
+				if h, _, err := net.SplitHostPort(v); err == nil {
+					return h, true
+				}
+				return v, true
+			}
+		}
+	}
+	return "", false
+}
+
+// minimal TLS ClientHello SNI parser
+func parseTLSSNI(b []byte) (string, bool) {
+	// need at least record header (5) + handshake hdr (4)
+	if len(b) < 9 {
+		return "", false
+	}
+	// TLS record type 0x16 (handshake)
+	if b[0] != 0x16 {
+		return "", false
+	}
+	// handshake type 0x01 (ClientHello)
+	if b[5] != 0x01 {
+		return "", false
+	}
+	// skip: record(5) + hs_type(1) + hs_len(3) + version(2) + random(32)
+	i := 5 + 1 + 3 + 2 + 32
+	if len(b) < i+1 {
+		return "", false
+	}
+	// session id
+	sidLen := int(b[i])
+	i += 1 + sidLen
+	if len(b) < i+2 {
+		return "", false
+	}
+	// cipher suites
+	csLen := int(binary.BigEndian.Uint16(b[i : i+2]))
+	i += 2 + csLen
+	if len(b) < i+1 {
+		return "", false
+	}
+	// compression methods
+	compLen := int(b[i])
+	i += 1 + compLen
+	if len(b) < i+2 {
+		return "", false
+	}
+	// extensions
+	extLen := int(binary.BigEndian.Uint16(b[i : i+2]))
+	i += 2
+	if len(b) < i+extLen {
+		extLen = len(b) - i
+	}
+	j := i
+	for j+4 <= i+extLen {
+		etype := binary.BigEndian.Uint16(b[j : j+2])
+		elen := int(binary.BigEndian.Uint16(b[j+2 : j+4]))
+		j += 4
+		if etype == 0 { // server_name
+			k := j
+			if k+2 > j+elen {
+				break
+			}
+			listLen := int(binary.BigEndian.Uint16(b[k : k+2]))
+			k += 2
+			end := k + listLen
+			for k+3 <= end && k+3 <= len(b) {
+				nameType := b[k]
+				k += 1
+				if k+2 > end {
+					break
+				}
+				hostLen := int(binary.BigEndian.Uint16(b[k : k+2]))
+				k += 2
+				if k+hostLen > end || k+hostLen > len(b) {
+					break
+				}
+				if nameType == 0 && hostLen > 0 {
+					return string(b[k : k+hostLen]), true
+				}
+				k += hostLen
+			}
+		}
+		j += elen
+	}
+	return "", false
+}
+
+func maskLabel(s string) string {
+	if s == "" {
+		return ""
+	}
+	if len(s) <= 2 {
+		return s[:1] + "*"
+	}
+	return s[:1] + strings.Repeat("*", len(s)-2) + s[len(s)-1:]
+}
+
+func maskHost(h string) string {
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.String()
+	}
+	parts := strings.Split(h, ".")
+	if len(parts) <= 1 {
+		return maskLabel(h)
+	}
+	parts[0] = maskLabel(parts[0])
+	return strings.Join(parts, ".")
+}
+
+func splice(dst, src net.Conn) {
+	_ = dst.SetDeadline(time.Now().Add(10 * time.Minute))
+	_ = src.SetDeadline(time.Now().Add(10 * time.Minute))
+	io.Copy(dst, src)
 }
 
 func handleConn(c net.Conn, up *upstream) {
@@ -174,15 +304,43 @@ func handleConn(c net.Conn, up *upstream) {
 		logging.Error.Printf("[fwd] SO_ORIGINAL_DST err: %v", err)
 		return
 	}
+
 	pc, err := dialViaProxy(up, dst)
 	if err != nil {
 		logging.Error.Printf("[fwd] CONNECT %s via %s:%d failed: %v", dst.String(), up.Host, up.Port, err)
 		return
 	}
-	logging.Info.Printf("[fwd] %s -> %s via %s:%d OK", c.RemoteAddr().String(), dst.String(), up.Host, up.Port)
 
-	go splice(pc, c)
-	splice(c, pc)
+	// Peek a little from client to extract Host/SNI, forward those bytes to proxy, then splice
+	var host string
+	buf := make([]byte, 2048)
+	_ = c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	n, _ := c.Read(buf)
+	_ = c.SetReadDeadline(time.Time{})
+	if n > 0 {
+		if h, ok := parseHTTPHost(buf[:n]); ok {
+			host = h
+		} else if h, ok := parseTLSSNI(buf[:n]); ok {
+			host = h
+		}
+		// forward preface to proxy
+		if _, err := pc.Write(buf[:n]); err != nil {
+			logging.Error.Printf("[fwd] prewrite to proxy failed: %v", err)
+			return
+		}
+	}
+
+	if host != "" {
+		logging.Info.Printf("[fwd] %s -> %s host=%s via %s:%d OK",
+			c.RemoteAddr().String(), dst.String(), maskHost(host), up.Host, up.Port)
+	} else {
+		logging.Info.Printf("[fwd] %s -> %s via %s:%d OK",
+			c.RemoteAddr().String(), dst.String(), up.Host, up.Port)
+	}
+
+	// splice both directions
+	go splice(pc, c) // proxy -> client
+	splice(c, pc)    // client -> proxy
 }
 
 func main() {
@@ -202,7 +360,7 @@ func main() {
 	if err != nil {
 		logging.Error.Fatalf("[fwd] listen %s: %v", addr, err)
 	}
-	logging.Info.Printf("pgw-fwd listening %s (transparent CONNECT) → proxy %s:%d", addr, up.Host, up.Port)
+	logging.Info.Printf("pgw-fwd listening %s (transparent CONNECT+SNI) → proxy %s:%d", addr, up.Host, up.Port)
 
 	for {
 		c, err := ln.Accept()
