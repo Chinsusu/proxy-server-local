@@ -298,8 +298,6 @@ func main() {
 
 			httpx.JSON(w, 201, mv)
 
-			httpx.JSON(w, 201, mv)
-		default:
 			w.WriteHeader(405)
 		}
 
