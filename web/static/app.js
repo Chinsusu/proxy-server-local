@@ -199,7 +199,7 @@ class PGWManager {
     this.proxies.forEach(proxy => {
       const tr = document.createElement('tr');
       const statusBadge = this.createStatusBadge(proxy.status);
-      const latencyText = proxy.latency_ms !== null ? `${proxy.latency_ms}ms` : '—';
+      const latencyBadge = this.createLatencyBadge(proxy.latency_ms);
       const lastChecked = proxy.last_checked_at 
         ? new Date(proxy.last_checked_at).toLocaleTimeString()
         : '—';
@@ -207,7 +207,7 @@ class PGWManager {
       tr.innerHTML = `
         <td>${proxy.host}:${proxy.port}</td>
         <td>${statusBadge}</td>
-        <td>${latencyText}</td>
+        <td>${latencyBadge}</td>
         <td>${proxy.exit_ip || '—'}</td>
         <td>${lastChecked}</td>
       `;
@@ -219,7 +219,7 @@ class PGWManager {
     const tr = document.createElement('tr');
     
     const statusBadge = this.createStatusBadge(proxy.status);
-    const latencyText = proxy.latency_ms !== null ? `${proxy.latency_ms}ms` : '—';
+    const latencyBadge = this.createLatencyBadge(proxy.latency_ms);
     const lastChecked = proxy.last_checked_at 
       ? new Date(proxy.last_checked_at).toLocaleTimeString()
       : '—';
@@ -229,7 +229,7 @@ class PGWManager {
       <td>${proxy.type}</td>
       <td>${proxy.host}:${proxy.port}</td>
       <td>${statusBadge}</td>
-      <td>${latencyText}</td>
+      <td>${latencyBadge}</td>
       <td>${proxy.exit_ip || '—'}</td>
       <td>${lastChecked}</td>
       <td>
@@ -254,6 +254,15 @@ class PGWManager {
 
     return `<span class="badge ${statusClass}">${status || 'Unknown'}</span>`;
   }
+
+  createLatencyBadge(ms) {
+    if (ms == null || isNaN(ms)) return '—';
+    let cls = 'text-bg-danger';
+    if (ms < 300) cls = 'text-bg-success';
+    else if (ms < 900) cls = 'text-bg-warning';
+    return `<span class="badge ${cls}">${ms}ms</span>`;
+  }
+
 
   renderMappings() {
     const tbody = document.getElementById('tbody-mappings');
