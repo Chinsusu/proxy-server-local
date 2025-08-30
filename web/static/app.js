@@ -636,19 +636,39 @@ class PGWManager {
   }
 
   showAlert(message, type = 'info') {
-    const alertContainer = document.getElementById('alerts');
-    if (!alertContainer) return;
+    const container = document.getElementById('alerts');
+    if (!container) return;
 
-    const alert = document.createElement('div');
-    alert.className = `alert alert-${type}`;
-    alert.textContent = message;
+    // Ensure container is overlay and toast-ready (CSS handles positioning)
+    container.classList.add('toast-stack');
 
-    alertContainer.appendChild(alert);
+    const bsType = ['success','danger','warning','info','primary','secondary'].includes(type) ? type : 'info';
+    const toast = document.createElement('div');
+    toast.className = `toast align-items-center text-bg-${bsType} border-0`;
+    toast.setAttribute('role','alert');
+    toast.setAttribute('aria-live','assertive');
+    toast.setAttribute('aria-atomic','true');
 
-    // Auto remove after 5 seconds
-    setTimeout(() => {
-      alert.remove();
-    }, 5000);
+    const inner = document.createElement('div');
+    inner.className = 'd-flex';
+    const body = document.createElement('div');
+    body.className = 'toast-body';
+    body.textContent = message;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-close btn-close-white me-2 m-auto';
+    btn.setAttribute('data-bs-dismiss','toast');
+    btn.setAttribute('aria-label','Close');
+
+    inner.appendChild(body);
+    inner.appendChild(btn);
+    toast.appendChild(inner);
+
+    container.appendChild(toast);
+
+    const inst = bootstrap.Toast.getOrCreateInstance(toast, { delay: 3500 });
+    inst.show();
+    toast.addEventListener('hidden.bs.toast', () => toast.remove());
   }
 
   showLoading(show) {

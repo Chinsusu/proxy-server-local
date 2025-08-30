@@ -9,3 +9,37 @@
 
 /* Keep alerts visible above content */
 #alerts .alert { margin-bottom: .75rem; }
+/* --- Dark theme overrides --- */
+:root[data-bs-theme="dark"] {
+  --pgw-bg: #121416;
+  --pgw-fg: #e6e8ea;
+  --pgw-card-bg: #1a1d20;
+  --pgw-card-border: #2a2f34;
+  --pgw-border: #2e3439;
+  --pgw-table-accent: rgba(255,255,255,0.03);
+  --pgw-table-hover: rgba(255,255,255,0.06);
+}
+
+html[data-bs-theme="dark"] body { background-color: var(--pgw-bg); color: var(--pgw-fg); }
+
+html[data-bs-theme="dark"] .card { background-color: var(--pgw-card-bg); border-color: var(--pgw-card-border); }
+html[data-bs-theme="dark"] .card-header { background-color: transparent; border-bottom-color: var(--pgw-border); }
+
+html[data-bs-theme="dark"] .table { color: var(--pgw-fg); }
+html[data-bs-theme="dark"] .table > :not(caption) > * > * { border-color: var(--pgw-border); }
+html[data-bs-theme="dark"] .table-striped > tbody > tr:nth-of-type(odd) > * { background-color: var(--pgw-table-accent); }
+html[data-bs-theme="dark"] .table-hover > tbody > tr:hover > * { background-color: var(--pgw-table-hover); }
+
+html[data-bs-theme="dark"] .text-muted { opacity: .75; }
+/* Overlay toast container to avoid layout shifts */
+#alerts {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 1080; /* above navbar */
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  pointer-events: none; /* allow clicking through except on toasts */
+}
+#alerts .toast { pointer-events: auto; }
