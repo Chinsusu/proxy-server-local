@@ -237,7 +237,7 @@ func main() {
 			if m.Protocol == "" {
 				m.Protocol = "http"
 			}
-			port, err := choosePortForProxy(st, m.ProxyID, m.LocalRedirectPort)
+			port, err := choosePortForClient(st, m.ClientID, m.LocalRedirectPort)
 			if err != nil {
 				httpx.JSON(w, 400, map[string]string{"error": err.Error()})
 				return
@@ -484,11 +484,12 @@ func deriveMappingState(mv types.MappingView) string {
 	return ""
 }
 
-// choosePortForProxy ensures one-port-per-proxy:
-// - If requested>0: allow only if unused or already bound to this proxy.
-// - If requested==0: reuse existing port of this proxy if any; otherwise allocate a free port in [base..max].
-func choosePortForProxy(st store.Store, proxyID string, requested int) (int, error) {
-	// map of port -> proxyID (first seen)
+// choosePortForClient ensures one-port-per-proxy:
+// choosePortForClient ensures one-port-per-client:
+// - If requested>0: allow only if unused or already bound to this client.
+// - If requested==0: reuse existing port of this client if any; otherwise allocate a free port in [base..max].
+func choosePortForClient(st store.Store, clientID string, requested int) (int, error) {
+	// map of port -> clientID (first seen)
 	used := map[int]string{}
 	existing := 0
 	for _, mv := range st.ListMappings() {
@@ -496,15 +497,15 @@ func choosePortForProxy(st store.Store, proxyID string, requested int) (int, err
 			continue
 		}
 		if _, ok := used[mv.LocalRedirectPort]; !ok {
-			used[mv.LocalRedirectPort] = mv.Proxy.ID
+			used[mv.LocalRedirectPort] = mv.Client.ID
 		}
-		if mv.Proxy.ID == proxyID && existing == 0 {
+		if mv.Client.ID == clientID && existing == 0 {
 			existing = mv.LocalRedirectPort
 		}
 	}
 	if requested > 0 {
-		if pid, ok := used[requested]; ok && pid != proxyID {
-			return 0, fmt.Errorf("port %d is already used by another proxy", requested)
+		if cid, ok := used[requested]; ok && cid != clientID {
+			return 0, fmt.Errorf("port %d is already used by another client", requested)
 		}
 		return requested, nil
 	}
