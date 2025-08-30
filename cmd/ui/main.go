@@ -339,19 +339,19 @@ const embeddedManage = `
       </div>
       <div class="card-body">
         <form id="form-mapping" class="row g-3 align-items-end">
-          <div class="col-12 col-md-4">
+          <div class="col-12 col-lg-3">
             <label class="form-label">Client IP Address</label>
             <input type="text" name="client_ip" class="form-control" placeholder="192.168.1.100" required>
           </div>
-          <div class="col-12 col-md-4">
+          <div class="col-12 col-lg-3">
             <label class="form-label">Proxy Server</label>
             <select name="proxy_id" id="select-proxy" class="form-select" required>
               <option value="">Select proxy server...</option>
             </select>
           </div>
-          <div class="col-12 col-md-4 d-grid d-md-block">
+          <div class="col-12 col-lg-3 d-grid d-md-block">
             <label class="form-label invisible">&nbsp;</label>
-            <button type="submit" class="btn btn-primary">Create Mapping</button>
+            <button type="submit" class="btn btn-primary btn-sm text-nowrap">Create Mapping</button>
           </div>
         </form>
       </div>
@@ -425,32 +425,32 @@ const embeddedProxies = `
       </div>
       <div class="card-body">
         <form id="form-proxy" class="row g-3 align-items-end">
-          <div class="col-6 col-md-2">
+          <div class="col-6 col-lg-2">
             <label class="form-label">Type</label>
             <select name="type" class="form-select" required>
               <option value="http">HTTP</option>
               <option value="https">HTTPS</option>
             </select>
           </div>
-          <div class="col-12 col-md-4">
+          <div class="col-12 col-lg-3">
             <label class="form-label">Host</label>
             <input type="text" name="host" class="form-control" placeholder="proxy.example.com" required>
           </div>
-          <div class="col-6 col-md-2">
+          <div class="col-6 col-lg-2">
             <label class="form-label">Port</label>
             <input type="number" name="port" class="form-control" placeholder="8080" required>
           </div>
-          <div class="col-6 col-md-2">
+          <div class="col-6 col-lg-2">
             <label class="form-label">Username</label>
             <input type="text" name="username" class="form-control" placeholder="Optional">
           </div>
-          <div class="col-6 col-md-2">
+          <div class="col-6 col-lg-2">
             <label class="form-label">Password</label>
             <input type="password" name="password" class="form-control" placeholder="Optional">
           </div>
-          <div class="col-12 col-md-2 d-grid">
+          <div class="col-12 col-lg-1 d-grid">
             <label class="form-label invisible">&nbsp;</label>
-            <button type="submit" class="btn btn-primary">Add Proxy</button>
+            <button type="submit" class="btn btn-primary btn-sm text-nowrap">Add Proxy</button>
           </div>
         </form>
 
@@ -460,7 +460,7 @@ const embeddedProxies = `
             <textarea id="import-proxies" class="form-control" rows="4" placeholder="192.0.2.10:8080:alice:s3cret&#10;198.51.100.22:3128:bob:pass123"></textarea>
             <div class="form-text">Format fixed to HTTP proxies. Invalid lines will be skipped.</div>
           </div>
-          <div class="col-12 col-md-2 d-grid">
+          <div class="col-12 col-lg-1 d-grid">
             <label class="form-label invisible">&nbsp;</label>
             <button id="btn-import-proxies" class="btn btn-secondary">Import</button>
           </div>
