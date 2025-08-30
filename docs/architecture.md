@@ -24,6 +24,9 @@ table inet pgw_filter {
     type filter hook forward priority filter; policy accept;
     ct state established,related accept
 
+    # chặn toàn bộ IPv6 LAN→WAN
+    iifname "ens19" oifname "eth0" meta nfproto ipv6 drop
+
     # chặn leak ra WAN & chặn UDP từ client
     ip saddr 192.168.2.3/32 oifname "eth0" drop
     ip saddr 192.168.2.3/32 meta l4proto udp drop
@@ -39,6 +42,9 @@ table inet pgw_filter {
 
     # mở cổng forwarder
     iifname "ens19" ip saddr 192.168.2.3/32 tcp dport 15001 accept
+
+    # chặn mọi kết nối LAN→các cổng forwarder không nằm trong whitelist per-client
+    iifname "ens19" tcp dport 15001-15999 drop
   }
 }
 ```
@@ -50,6 +56,8 @@ table inet pgw_filter {
 * API chỉ chấp nhận `ip_cidr` với prefix **= 32**. Nếu người dùng nhập IP không có `/`, API tự chuyển thành `/32`. Nếu prefix `< 32` trả 400.
 
 ## Hành vi mặc định (từ v1.1)
+
+> Agent chỉ sinh rule cho mapping ở trạng thái APPLIED; PENDING/FAILED sẽ không có rule (đường bị đóng).
 
 - Mô hình 1 cổng ↔ 1 client: mỗi client có một cổng forwarder riêng; nếu cùng một client tạo thêm mapping, sẽ tái sử dụng chính cổng đó. API tự gán cổng theo client (tái sử dụng nếu có, cấp mới nếu chưa có, trong khoảng 15001..15999 hoặc theo PGW_FWD_BASE_PORT/PGW_FWD_MAX_PORT). Lần đầu dùng cổng, API sẽ cố gắng start `pgw-fwd@<port>`, tạo file cờ `/var/lib/pgw/ports/<port>`, gọi Agent `reconcile`, và đánh dấu **APPLIED** khi hợp lệ.
 - Khi xoá Mapping, API sẽ: nếu không còn mapping nào dùng cùng `port` đó thì xoá file cờ tương ứng và gọi `systemctl stop pgw-fwd@<port>` (an toàn nếu unit không tồn tại). Cuối cùng luôn gọi Agent `reconcile` để đồng bộ nftables.
