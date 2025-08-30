@@ -342,7 +342,6 @@ const embeddedManage = `
           <div class="col-12 col-md-4">
             <label class="form-label">Client IP Address</label>
             <input type="text" name="client_ip" class="form-control" placeholder="192.168.1.100" required>
-            <div class="form-text">IP will automatically get /32 suffix for strict routing</div>
           </div>
           <div class="col-12 col-md-4">
             <label class="form-label">Proxy Server</label>
