@@ -511,10 +511,10 @@ The **Agent** will generate/remove the exact rules above per mapping.
 
 ---
 
-## Per-proxy port model
+## Per-client port model
 
-- Mỗi proxy gắn với đúng 1 cổng forwarder (ví dụ Proxy A → :15001, Proxy B → :15002).
-- API tự gán cổng cho proxy: nếu proxy đã có cổng được dùng bởi mapping khác thì tái sử dụng; nếu chưa có thì tự cấp từ dải [PGW_FWD_BASE_PORT..PGW_FWD_MAX_PORT] (mặc định 15001..15999).
+- Mỗi client gắn với đúng 1 cổng forwarder (ví dụ Proxy A → :15001, Proxy B → :15002).
+- API tự gán cổng cho client: nếu proxy đã có cổng được dùng bởi mapping khác thì tái sử dụng; nếu chưa có thì tự cấp từ dải [PGW_FWD_BASE_PORT..PGW_FWD_MAX_PORT] (mặc định 15001..15999).
 - Khi là lần đầu dùng cổng mới, API sẽ cố gắng `systemctl start pgw-fwd@<port>` và tạo file cờ `/var/lib/pgw/ports/<port>`.
 - Agent sẽ dựng rule nft: `ip saddr <client>/32 tcp dport {80,443} redirect to :<port>` theo proxy của client.
 - Hệ quả: nếu 2 client dùng 2 proxy khác nhau thì phải ở 2 cổng khác nhau để có exit IP khác nhau đồng thời.

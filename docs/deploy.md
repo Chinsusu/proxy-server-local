@@ -110,11 +110,11 @@ ss -lntp | grep :15001
 journalctl -u pgw-fwd -f
 ```
 
-## Hành vi mặc định: Auto-apply, per-proxy port và Auto-cleanup
+## Hành vi mặc định: Auto-apply, per-client port và Auto-cleanup
 
 - Tạo mapping (POST /v1/mappings):
-  - Mô hình "1 cổng forwarder ↔ 1 proxy": tất cả client gán cùng proxy sẽ dùng chung một cổng.
-  - API tự gán cổng theo proxy: nếu proxy đã có cổng, tái sử dụng; nếu chưa, chọn cổng trống trong khoảng [PGW_FWD_BASE_PORT..PGW_FWD_MAX_PORT] (mặc định 15001..15999). Có thể cung cấp `local_redirect_port` nhưng sẽ bị từ chối nếu cổng đó đang thuộc proxy khác.
+  - Mô hình "1 cổng forwarder ↔ 1 client": tất cả client gán cùng proxy sẽ dùng chung một cổng.
+  - API tự gán cổng theo client: nếu proxy đã có cổng, tái sử dụng; nếu chưa, chọn cổng trống trong khoảng [PGW_FWD_BASE_PORT..PGW_FWD_MAX_PORT] (mặc định 15001..15100). Có thể cung cấp `local_redirect_port` nhưng sẽ bị từ chối nếu cổng đó đang thuộc client khác.
   - API ghi file cờ `/var/lib/pgw/ports/<port>`, và khi là lần đầu dùng cổng đó, API sẽ `systemctl start pgw-fwd@<port>` (best-effort). Sau đó gọi Agent `reconcile`. Khi cổng `127.0.0.1:<port>` mở và rule nft đã có, mapping được đánh dấu `APPLIED`.
   - Biến môi trường (tuỳ chọn): `PGW_FWD_BASE_PORT` và `PGW_FWD_MAX_PORT` để điều chỉnh dải cổng tự cấp.
 
