@@ -247,11 +247,14 @@ func renderRules(cfg cfgAgent, mvs []types.MappingView) string {
 		fmt.Fprintf(&b, "add rule inet pgw_filter forward ip saddr %s meta l4proto udp drop\n", r.Prefix)
 	}
 	fmt.Fprintln(&b, "add chain inet pgw_filter input { type filter hook input priority 0; policy accept; }")
+	fmt.Fprintln(&b, "add rule inet pgw_filter input ct state established,related accept")
 	for _, r := range pruned {
 		fmt.Fprintf(&b, "add rule inet pgw_filter input iifname \"%s\" ip saddr %s udp dport 53 accept\n", cfg.LANIF, r.Prefix)
 		fmt.Fprintf(&b, "add rule inet pgw_filter input iifname \"%s\" ip saddr %s tcp dport 53 accept\n", cfg.LANIF, r.Prefix)
 		fmt.Fprintf(&b, "add rule inet pgw_filter input iifname \"%s\" ip saddr %s tcp dport %d accept\n", cfg.LANIF, r.Prefix, r.Port)
 	}
+
+	fmt.Fprintf(&b, "add rule inet pgw_filter input iifname \"%s\" tcp dport 15001-15999 drop\n", cfg.LANIF)
 
 	return b.String()
 }
