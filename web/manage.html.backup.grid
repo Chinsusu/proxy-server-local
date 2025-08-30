@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PGW Mapping Management</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-content">
+      <div class="logo">🔒 Proxy Gateway</div>
+      <nav class="nav">
+        <a href="/" class="nav-link">Dashboard</a>
+        <a href="/proxies" class="nav-link">Proxies</a>
+        <a href="/manage" class="nav-link">Mappings</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- Alerts container -->
+    <div id="alerts"></div>
+
+    <!-- Create New Mapping -->
+    <div class="grid-container">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">New Mapping</h3>
+      </div>
+      <div class="card-content">
+        <form id="form-mapping" class="form-inline">
+          <div class="form-group">
+            <label class="form-label">Client IP Address</label>
+            <input type="text" name="client_ip" class="form-input" placeholder="192.168.1.100" required>
+            <small class="form-help">IP will automatically get /32 suffix for strict routing</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Proxy Server</label>
+            <select name="proxy_id" id="select-proxy" class="form-select" required>
+              <option value="">Select proxy server...</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" style="opacity: 0; pointer-events: none;">Label</label>
+            <button type="submit" class="btn btn-primary">Create Mapping</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Mapping Management Actions -->
+        </p>
+      </div>
+    </div>
+
+    <!-- Current Mappings -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Mappings</h3>
+        <div class="card-actions">
+          <span class="text-muted" id="mapping-count">— mappings</span>
+        </div>
+      </div>
+      <div class="table-container">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Client IP/CIDR</th>
+              <th>Proxy Server</th>
+              <th>State</th>
+              <th>Local Port</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tbody-mappings">
+            <tr>
+              <td colspan="6" class="text-center">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+
+  <script src="/static/app.js?v=1756566350"></script>
+</body>
+</html>

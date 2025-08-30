@@ -1,5 +1,7 @@
 class PGWManager {
   constructor() {
+    this.submitting = false;
+    this.submitting = false;
     this.apiBase = '/api';
     this.agentBase = '/agent';
     this.proxies = [];
@@ -10,9 +12,9 @@ class PGWManager {
     this.pSort = 'address'; this.pAsc = true;
     this.mSort = 'client';  this.mAsc = true;
     try {
-      const sp = JSON.parse(localStorage.getItem('pgw_sort_p2')||'{}');
+      const sp = JSON.parse(localStorage.getItem('pgw_sort_p_ui')||'{}');
       if (sp && sp.k) { this.pSort = sp.k; this.pAsc = !!sp.a; }
-      const sm = JSON.parse(localStorage.getItem('pgw_sort_m2')||'{}');
+      const sm = JSON.parse(localStorage.getItem('pgw_sort_m_ui')||'{}');
       if (sm && sm.k) { this.mSort = sm.k; this.mAsc = !!sm.a; }
     } catch (_) {}
     
@@ -165,7 +167,7 @@ class PGWManager {
         th.style.cursor='pointer'; th.onclick=()=>{
           const k=th.getAttribute('data-k');
           if (this.pSort===k) this.pAsc=!this.pAsc; else { this.pSort=k; this.pAsc=true; }
-          localStorage.setItem('pgw_sort_p2', JSON.stringify({k:this.pSort,a:this.pAsc}));
+          localStorage.setItem('pgw_sort_p_ui', JSON.stringify({k:this.pSort,a:this.pAsc}));
           this.renderProxies();
         };
       });
@@ -181,6 +183,7 @@ class PGWManager {
     sorted.forEach(proxy => {
       const row = this.createProxyRow(proxy);
       tbody.appendChild(row);
+    });
     });
   }
 
@@ -246,10 +249,10 @@ class PGWManager {
 
   createStatusBadge(status) {
     const statusClass = {
-      'OK': 'text-bg-success',
-      'DEGRADED': 'text-bg-warning',
-      'DOWN': 'text-bg-danger'
-    }[status] || 'text-bg-secondary';
+      'OK': 'badge-success',
+      'DEGRADED': 'badge-warning',
+      'DOWN': 'badge-danger'
+    }[status] || 'badge-secondary';
 
     return `<span class="badge ${statusClass}">${status || 'Unknown'}</span>`;
   }
@@ -284,7 +287,7 @@ class PGWManager {
         th.style.cursor='pointer'; th.onclick=()=>{
           const k=th.getAttribute('data-k');
           if (this.mSort===k) this.mAsc=!this.mAsc; else { this.mSort=k; this.mAsc=true; }
-          localStorage.setItem('pgw_sort_m2', JSON.stringify({k:this.mSort,a:this.mAsc}));
+          localStorage.setItem('pgw_sort_m_ui', JSON.stringify({k:this.mSort,a:this.mAsc}));
           this.renderMappings();
         };
       });
@@ -300,6 +303,7 @@ class PGWManager {
     sorted.forEach(mapping => {
       const row = this.createMappingRow(mapping);
       tbody.appendChild(row);
+    });
     });
   }
 
@@ -428,6 +432,11 @@ class PGWManager {
   }
 
   async createMapping() {
+    if (this.submitting) { console.log("Already submitting, ignoring"); return; }
+    this.submitting = true;
+    console.log("Creating mapping...");
+    if (this.submitting) return;
+    this.submitting = true;
     const form = document.getElementById('form-mapping');
     const formData = new FormData(form);
 
@@ -478,6 +487,8 @@ class PGWManager {
       });
 
       this.showAlert('Mapping created successfully', 'success');
+      this.submitting = false;
+      this.submitting = false;
       form.reset();
       this.loadData();
       
@@ -486,6 +497,8 @@ class PGWManager {
 
     } catch (error) {
       console.error('Failed to create mapping:', error);
+      this.submitting = false;
+      this.submitting = false;
     }
   }
 
@@ -686,4 +699,11 @@ document.addEventListener('DOMContentLoaded', () => {
       link.classList.add('active');
     }
   });
+document.addEventListener('DOMContentLoaded', () => {
+  // Prevent double initialization
+  if (window.pgwManager) {
+    console.log('PGW Manager already initialized');
+    return;
+  }
+  window.pgwManager = new PGWManager();
 });

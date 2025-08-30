@@ -4,109 +4,98 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PGW Dashboard</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css?v=1756567001">
 </head>
 <body>
-  <header class="header">
-    <div class="header-content">
-      <div class="logo">🔒 Proxy Gateway</div>
-      <nav class="nav">
-        <a href="/" class="nav-link">Dashboard</a>
-        <a href="/proxies" class="nav-link">Proxies</a>
-        <a href="/manage" class="nav-link">Mappings</a>
-      </nav>
+  <nav class="navbar navbar-expand-lg bg-body-tertiary">
+    <div class="container">
+      <a class="navbar-brand" href="/">🔒 Proxy Gateway</a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#pgwNav" aria-controls="pgwNav" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="pgwNav">
+        <ul class="navbar-nav ms-auto">
+          <li class="nav-item"><a class="nav-link active" href="/">Dashboard</a></li>
+          <li class="nav-item"><a class="nav-link" href="/proxies">Proxies</a></li>
+          <li class="nav-item"><a class="nav-link" href="/manage">Mappings</a></li>
+        </ul>
+      </div>
     </div>
-  </header>
+  </nav>
 
-  <div class="container">
-    <!-- Alerts container -->
+  <div class="container py-4">
     <div id="alerts"></div>
 
-    <!-- Loading indicator -->
-    <div id="loading-indicator" class="loading hidden">
-      <div class="spinner"></div>
-      Loading...
+    <div id="loading-indicator" class="d-flex align-items-center mb-3">
+      <div class="spinner-border text-primary me-2" role="status" style="width:1.5rem;height:1.5rem;"><span class="visually-hidden">Loading...</span></div>
+      <span>Loading...</span>
     </div>
 
-    <!-- Stats overview -->
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-value" id="stat-proxies">—</div>
-        <div class="stat-label">Total Proxies</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" id="stat-proxies-ok">—</div>
-        <div class="stat-label">Healthy Proxies</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" id="stat-mappings">—</div>
-        <div class="stat-label">Active Mappings</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" id="last-refresh">—</div>
-        <div class="stat-label">Last Updated</div>
-      </div>
-    </div>
-
-    <!-- Quick actions -->
-    <div class="card">
-      <div class="card-header">
-        <h3 class="card-title">Quick Actions</h3>
-        <div class="card-actions">
-          <button id="btn-refresh" class="btn btn-secondary">
-            🔄 Refresh
-          </button>
+    <div class="row g-3 mb-4">
+      <div class="col-12 col-md-3">
+        <div class="card text-center">
+          <div class="card-body">
+            <div class="fs-3 fw-bold text-primary" id="stat-proxies">—</div>
+            <div class="text-muted">Total Proxies</div>
+          </div>
         </div>
       </div>
-      <div class="card-content">
-        <div class="flex gap-2">
-          <button id="btn-health-all" class="btn btn-primary">
-            ⚡ Health Check All
-          </button>
-          <button id="btn-reconcile" class="btn btn-success">
-            🔧 Apply Rules
-          </button>
-          <a href="/proxies" class="btn btn-primary">
-            ➕ Add Proxy
-          </a>
-          <a href="/manage" class="btn btn-secondary">
-            🔗 Manage Mappings
-          </a>
+      <div class="col-12 col-md-3">
+        <div class="card text-center">
+          <div class="card-body">
+            <div class="fs-3 fw-bold text-success" id="stat-proxies-ok">—</div>
+            <div class="text-muted">Healthy Proxies</div>
+          </div>
         </div>
       </div>
-    </div>
-
-    <!-- System Status -->
-    <div class="card">
-      <div class="card-header">
-        <h3 class="card-title">System Overview</h3>
+      <div class="col-12 col-md-3">
+        <div class="card text-center">
+          <div class="card-body">
+            <div class="fs-3 fw-bold text-primary" id="stat-mappings">—</div>
+            <div class="text-muted">Active Mappings</div>
+          </div>
+        </div>
       </div>
-      <div class="card-content">
-        <div class="system-status">
-          <div class="status-item">
-            <span class="status-label">API Service:</span>
-            <span class="badge badge-success" id="api-status">Running</span>
-          </div>
-          <div class="status-item">
-            <span class="status-label">Agent Service:</span>
-            <span class="badge badge-success" id="agent-status">Running</span>
-          </div>
-          <div class="status-item">
-            <span class="status-label">Forwarder Service:</span>
-            <span class="badge badge-success" id="fwd-status">Running</span>
+      <div class="col-12 col-md-3">
+        <div class="card text-center">
+          <div class="card-body">
+            <div class="fs-5 fw-semibold" id="last-refresh">—</div>
+            <div class="text-muted">Last Updated</div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Recent Activity -->
-    <div class="card">
+    <div class="card mb-4">
       <div class="card-header">
-        <h3 class="card-title">Proxy Status Summary</h3>
+        <h5 class="mb-0">System Overview</h5>
       </div>
-      <div class="table-container">
-        <table class="table">
-          <thead>
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-12 col-md-4 d-flex justify-content-between">
+            <span class="fw-semibold">API Service</span>
+            <span class="badge text-bg-success" id="api-status">Running</span>
+          </div>
+          <div class="col-12 col-md-4 d-flex justify-content-between">
+            <span class="fw-semibold">Agent Service</span>
+            <span class="badge text-bg-success" id="agent-status">Running</span>
+          </div>
+          <div class="col-12 col-md-4 d-flex justify-content-between">
+            <span class="fw-semibold">Forwarder Service</span>
+            <span class="badge text-bg-success" id="fwd-status">Running</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Status</h5>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-striped table-hover align-middle mb-0">
+          <thead class="table-light">
             <tr>
               <th>Proxy</th>
               <th>Status</th>
@@ -116,15 +105,14 @@
             </tr>
           </thead>
           <tbody id="tbody-proxy-summary">
-            <tr>
-              <td colspan="5" class="text-center">Loading...</td>
-            </tr>
+            <tr><td colspan="5" class="text-center">Loading...</td></tr>
           </tbody>
         </table>
       </div>
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="/static/app.js?v=1756567001"></script>
 </body>
 </html>

@@ -251,7 +251,7 @@ const embeddedDashboard = `<!DOCTYPE html>
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=1756566360"></script>
 </body>
 </html>`
 
@@ -321,7 +321,7 @@ const embeddedManage = `<!DOCTYPE html>
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=1756566360"></script>
 </body>
 </html>`
 
