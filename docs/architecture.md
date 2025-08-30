@@ -51,7 +51,7 @@ table inet pgw_filter {
 
 ## Hành vi mặc định (từ v1.1)
 
-- Mô hình 1 cổng ↔ 1 client: mọi client gán cùng proxy sẽ dùng chung cổng. API tự gán cổng theo client (tái sử dụng nếu có, cấp mới nếu chưa có, trong khoảng 15001..15999 hoặc theo PGW_FWD_BASE_PORT/PGW_FWD_MAX_PORT). Lần đầu dùng cổng, API sẽ cố gắng start `pgw-fwd@<port>`, tạo file cờ `/var/lib/pgw/ports/<port>`, gọi Agent `reconcile`, và đánh dấu **APPLIED** khi hợp lệ.
+- Mô hình 1 cổng ↔ 1 client: mỗi client có một cổng forwarder riêng; nếu cùng một client tạo thêm mapping, sẽ tái sử dụng chính cổng đó. API tự gán cổng theo client (tái sử dụng nếu có, cấp mới nếu chưa có, trong khoảng 15001..15999 hoặc theo PGW_FWD_BASE_PORT/PGW_FWD_MAX_PORT). Lần đầu dùng cổng, API sẽ cố gắng start `pgw-fwd@<port>`, tạo file cờ `/var/lib/pgw/ports/<port>`, gọi Agent `reconcile`, và đánh dấu **APPLIED** khi hợp lệ.
 - Khi xoá Mapping, API sẽ: nếu không còn mapping nào dùng cùng `port` đó thì xoá file cờ tương ứng và gọi `systemctl stop pgw-fwd@<port>` (an toàn nếu unit không tồn tại). Cuối cùng luôn gọi Agent `reconcile` để đồng bộ nftables.
 
 
