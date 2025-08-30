@@ -454,15 +454,14 @@ const embeddedProxies = `
           </div>
         </form>
 
-        <div class="row g-3 align-items-end mt-2">
+        <div class="row g-3 align-items-center mt-2">
           <div class="col-12 col-md-10">
             <label class="form-label">Bulk import (IP:PORT:USER:PASSWORD, one per line)</label>
             <textarea id="import-proxies" class="form-control" rows="4" placeholder="192.0.2.10:8080:alice:s3cret&#10;198.51.100.22:3128:bob:pass123"></textarea>
             <div class="form-text">Format fixed to HTTP proxies. Invalid lines will be skipped.</div>
           </div>
           <div class="col-12 col-lg-1 d-grid">
-            <label class="form-label invisible">&nbsp;</label>
-            <button id="btn-import-proxies" class="btn btn-secondary">Import</button>
+            <button id="btn-import-proxies" class="btn btn-secondary btn-sm text-nowrap">Import</button>
           </div>
         </div>
       </div>

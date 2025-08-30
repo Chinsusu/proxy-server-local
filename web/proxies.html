@@ -23,10 +23,8 @@
       </div>
     </div>
   </nav>
-
   <div class="container py-4">
     <div id="alerts"></div>
-
     <div class="card mb-4">
       <div class="card-header">
         <h5 class="mb-0">Add New Proxy Server</h5>
@@ -61,21 +59,18 @@
             <button type="submit" class="btn btn-primary btn-sm text-nowrap">Add Proxy</button>
           </div>
         </form>
-
-        <div class="row g-3 align-items-end mt-2">
+        <div class="row g-3 align-items-center mt-2">
           <div class="col-12 col-md-10">
             <label class="form-label">Bulk import (IP:PORT:USER:PASSWORD, one per line)</label>
             <textarea id="import-proxies" class="form-control" rows="4" placeholder="192.0.2.10:8080:alice:s3cret&#10;198.51.100.22:3128:bob:pass123"></textarea>
             <div class="form-text">Format fixed to HTTP proxies. Invalid lines will be skipped.</div>
           </div>
-          <div class="col-12 col-lg-1 d-grid">
-            <label class="form-label invisible">&nbsp;</label>
-            <button id="btn-import-proxies" class="btn btn-secondary">Import</button>
+          <div class="col-12 col-lg-1 d-flex align-items-center">
+            <button id="btn-import-proxies" class="btn btn-secondary btn-sm text-nowrap">Import</button>
           </div>
         </div>
       </div>
     </div>
-
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <h5 class="mb-0">Proxy Servers</h5>
@@ -102,7 +97,6 @@
       </div>
     </div>
   </div>
-
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/static/app.js?v=1756567003"></script>
 </body>
