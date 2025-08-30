@@ -236,6 +236,8 @@ func renderRules(cfg cfgAgent, mvs []types.MappingView) string {
 	fmt.Fprintln(&b, "add table inet pgw_filter")
 	fmt.Fprintln(&b, "add chain inet pgw_filter forward { type filter hook forward priority 0; policy accept; }")
 	fmt.Fprintln(&b, "add rule inet pgw_filter forward ct state established,related accept")
+	// Drop all IPv6 forwarding from LAN->WAN to avoid leaks (no IPv6 redirect)
+	fmt.Fprintf(&b, "add rule inet pgw_filter forward iifname \"%s\" oifname \"%s\" meta nfproto ipv6 drop\n", cfg.LANIF, cfg.WANIF)
 	for _, r := range pruned {
 		fmt.Fprintf(&b, "add rule inet pgw_filter forward ip saddr %s oifname \"%s\" drop\n", r.Prefix, cfg.WANIF)
 		fmt.Fprintf(&b, "add rule inet pgw_filter forward ip saddr %s meta l4proto udp drop\n", r.Prefix)
