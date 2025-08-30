@@ -45,7 +45,7 @@ for each enabled proxy:
   2) if http: GET https://api.ipify.org?format=text via Proxy (timeout 5s)
      if socks5: socks5 dial api.ipify.org:443 then TLS + GET / (timeout 5s)
   3) latency_ms = connect + handshake + first-byte
-  4) if success: status=OK if latency < threshold (default 800ms), else DEGRADED
+  4) if success: status=OK if latency < threshold (default 500/900ms (OK<500ms, DEGRADED<900ms)), else DEGRADED
      if failure: status=DOWN
   5) persist telemetry; if changed, publish proxy.status_changed
 
@@ -129,7 +129,7 @@ Key endpoints:
 
 - Health check interval: 30s (configurable).
 - Time to block on proxy DOWN: < 1s on event path; < 5s on polling fallback.
-- UI shows latency buckets: <200ms green, 200-800ms amber, >800ms red.
+- UI shows latency buckets: <300ms green, 300-900ms amber, >900ms red.
 
 ## 11. Failure cases
 

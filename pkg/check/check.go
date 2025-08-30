@@ -83,9 +83,9 @@ func CheckHTTP(ctx context.Context, host string, port int, user, pass *string) R
 
 func classifyLatency(d time.Duration) types.ProxyStatus {
 	switch ms := d.Milliseconds(); {
-	case ms < 400:
+	case ms < 500:
 		return types.StatusOK
-	case ms < 800:
+	case ms < 900:
 		return types.StatusDegraded
 	default:
 		return types.StatusDown

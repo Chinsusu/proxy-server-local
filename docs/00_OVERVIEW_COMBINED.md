@@ -256,7 +256,7 @@ AGPL-3.0 (server-side changes must be shared).
   2. Update `status`, `latency_ms`, `exit_ip`, `last_checked_at` in DB.  
   3. Publish `proxy.status_changed` if any field changed.  
 - **Status derivation**:  
-  - `OK` = request success & latency < threshold (default 800ms)  
+  - `OK` = request success & latency < threshold (default 500/900ms (OK<500ms, DEGRADED<900ms))  
   - `DEGRADED` = success but > threshold  
   - `DOWN` = failure or auth error
 
