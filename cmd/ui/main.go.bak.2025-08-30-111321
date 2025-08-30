@@ -1,0 +1,86 @@
+package main
+
+import (
+	"log"
+    "io"
+    "net/http"
+    "strings"
+	"github.com/Chinsusu/proxy-server-local/internal/ui"
+)
+
+func main() {
+	if err := ui.Run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// --- robust /agent proxy (trailing slash safe) ---
+func proxyAgent(cfg cfgUI) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        // cắt prefix /agent hoặc /agent/
+        p := r.URL.Path
+        if strings.HasPrefix(p, "/agent/") {
+            p = p[len("/agent"):]
+        } else if p == "/agent" {
+            p = "/"
+        } else if strings.HasPrefix(p, "/agent") {
+            p = p[len("/agent"):]
+            if p == "" { p = "/" }
+        }
+
+        // build upstream URL
+        upstream := cfg.AgentBase + p
+        req, err := http.NewRequestWithContext(r.Context(), r.Method, upstream, r.Body)
+        if err != nil {
+            http.Error(w, "proxy build: "+err.Error(), http.StatusBadGateway)
+            return
+        }
+        // copy headers tối thiểu
+        req.Header = r.Header.Clone()
+
+        resp, err := http.DefaultClient.Do(req)
+        if err != nil {
+            http.Error(w, "proxy dial: "+err.Error(), http.StatusBadGateway)
+            return
+        }
+        defer resp.Body.Close()
+
+        // copy status + headers + body
+        for k, vv := range resp.Header {
+            for _, v := range vv { w.Header().Add(k, v) }
+        }
+        w.WriteHeader(resp.StatusCode)
+        io.Copy(w, resp.Body)
+    }
+}
+//
+// proxyAgent — forward /agent và /agent/... sang AgentBase, không lệ thuộc cfgUI
+//
+func proxyAgent(agentBase string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if strings.HasPrefix(p, "/agent/") {
+			p = p[len("/agent"):]
+		} else if p == "/agent" {
+			p = "/"
+		} else if strings.HasPrefix(p, "/agent") {
+			p = p[len("/agent"):]
+			if p == "" { p = "/" }
+		}
+		upstream := strings.TrimRight(agentBase, "/") + p
+
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, upstream, r.Body)
+		if err != nil { http.Error(w, "proxy build: "+err.Error(), http.StatusBadGateway); return }
+		req.Header = r.Header.Clone()
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil { http.Error(w, "proxy dial: "+err.Error(), http.StatusBadGateway); return }
+		defer resp.Body.Close()
+
+		for k, vv := range resp.Header {
+			for _, v := range vv { w.Header().Add(k, v) }
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}
+}

@@ -488,3 +488,37 @@ The **Agent** will generate/remove the exact rules above per mapping.
 - OAuth2 (OIDC) login
 - Audit log UI
 - Import/export mappings via CSV
+
+---
+
+## Troubleshooting
+
+- Mapping does not reach APPLIED after creation:
+  - Verify Agent reachable via UI reverse proxy: `curl -sI http://127.0.0.1:8081/agent/reconcile | head -n1` should be `200 OK`.
+  - Verify port flag exists: `ls -l /var/lib/pgw/ports` should list the port (e.g., `15001`).
+  - Verify forwarder is listening on the port: `ss -lntp | grep :15001` (or your port). Start it if needed: `sudo systemctl start pgw-fwd@15001`.
+  - Verify nft rules include `redirect to :<port>` for the client IP: `sudo nft list table ip pgw` and `sudo nft list table inet pgw_filter`.
+  - Confirm `PGW_LAN_IFACE`/`PGW_WAN_IFACE` env match real NIC names.
+  - Ensure the mapped Proxy is Enabled and healthy (OK/DEGRADED).
+- Multiple mappings to different proxies at the same time:
+  - A single forwarder instance at one port can only target one upstream. For simultaneous mappings to different proxies, assign distinct `local_redirect_port` per mapping and run separate forwarders (e.g., `pgw-fwd@15001`, `pgw-fwd@15002`).
+- Agent reconcile errors or no nft changes:
+  - Check logs: `journalctl -u pgw-agent -n 200 --no-pager`.
+  - Ensure permissions for nft: consider `CapabilityBoundingSet=CAP_NET_ADMIN` in the unit or run with appropriate privileges.
+- UI shows empty after restart:
+  - If using in-memory store, state resets. Recreate proxies/clients/mappings or switch to file store with `PGW_STORE=file` and `PGW_STORE_PATH=/var/lib/pgw/state.json`.
+
+
+---
+
+## Per-proxy port model
+
+- Mỗi proxy gắn với đúng 1 cổng forwarder (ví dụ Proxy A → :15001, Proxy B → :15002).
+- API tự gán cổng cho proxy: nếu proxy đã có cổng được dùng bởi mapping khác thì tái sử dụng; nếu chưa có thì tự cấp từ dải [PGW_FWD_BASE_PORT..PGW_FWD_MAX_PORT] (mặc định 15001..15999).
+- Khi là lần đầu dùng cổng mới, API sẽ cố gắng `systemctl start pgw-fwd@<port>` và tạo file cờ `/var/lib/pgw/ports/<port>`.
+- Agent sẽ dựng rule nft: `ip saddr <client>/32 tcp dport {80,443} redirect to :<port>` theo proxy của client.
+- Hệ quả: nếu 2 client dùng 2 proxy khác nhau thì phải ở 2 cổng khác nhau để có exit IP khác nhau đồng thời.
+
+
+Lưu ý (an toàn): Chỉ apply mapping sau khi kiểm tra health của proxy thành công (OK/DEGRADED).
+Nếu health thất bại, mapping ở trạng thái FAILED và sẽ không khởi động forwarder/cấp rule.
