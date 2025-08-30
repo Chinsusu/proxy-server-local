@@ -334,15 +334,18 @@ class PGWManager {
 
     select.innerHTML = '<option value="">Select proxy server...</option>';
 
-    if (!this.proxies || this.proxies.length === 0) {
+    const used = new Set((this.mappings || []).map(m => m && m.proxy ? m.proxy.id : null).filter(Boolean));
+    const available = (this.proxies || []).filter(p => !used.has(p.id));
+
+    if (!available || available.length === 0) {
       const opt = document.createElement('option');
       opt.disabled = true;
-      opt.textContent = 'No available proxies';
+      opt.textContent = 'No available proxies (all mapped)';
       select.appendChild(opt);
       return;
     }
 
-    (this.proxies || []).forEach(proxy => {
+    available.forEach(proxy => {
       const option = document.createElement('option');
       option.value = proxy.id;
       const statusIndicator = proxy.status === 'OK' ? '✓' : proxy.status === 'DEGRADED' ? '⚠' : '✗';
