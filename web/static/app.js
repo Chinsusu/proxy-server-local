@@ -92,7 +92,7 @@ class PGWManager {
     if (this.loading) return;
     
     this.loading = true;
-    this.showLoading(true);
+    let _spinnerTO = setTimeout(() => this.showLoading(true), 700);
 
     try {
       const [proxies, clients, mappings] = await Promise.all([
@@ -117,6 +117,7 @@ class PGWManager {
       console.error('Failed to load data:', error);
     } finally {
       this.loading = false;
+      clearTimeout(_spinnerTO);
       this.showLoading(false);
     }
   }
