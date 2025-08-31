@@ -159,3 +159,18 @@ Lưu ý: API sẽ dọn cờ `/var/lib/pgw/ports/<port>` và gọi `systemctl st
 
 Lưu ý (an toàn): Chỉ apply mapping sau khi kiểm tra health của proxy thành công (OK/DEGRADED).
 Nếu health thất bại, mapping ở trạng thái FAILED và sẽ không khởi động forwarder/cấp rule.
+
+## Authentication (JWT)
+
+Thiết lập đăng nhập admin và bảo mật JWT qua file ENV (/etc/pgw/pgw.env):
+
+- Bắt buộc:
+  - `PGW_JWT_SECRET` — khoá ký JWT.
+- Admin bootstrap (API login):
+  - `PGW_ADMIN_USER` và `PGW_ADMIN_PASS_HASH` (Argon2id PHC, khuyến nghị),
+    hoặc `PGW_ADMIN_PASS` (không khuyến nghị).
+- Agent nội bộ:
+  - (Tuỳ chọn) `PGW_AGENT_TOKEN` — token để Agent gọi API (được coi là role `agent`).
+
+Đăng nhập API: `POST /v1/auth/login` với JSON `{username,password}` → trả về token JWT.
+UI có trang `/login`, cookie `pgw_jwt` sẽ được set và tự động forward tới API.

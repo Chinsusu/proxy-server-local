@@ -25,3 +25,5 @@ run-agent:
 
 run-fwd:
 	PGW_FWD_ADDR=:15000 go run ./cmd/fwd
+
+.PHONY: build $(CMDS)

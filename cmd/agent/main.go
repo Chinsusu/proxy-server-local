@@ -140,6 +140,9 @@ func reconcile(cfg cfgAgent) error {
 func fetchMappings(apiBase string) ([]types.MappingView, error) {
 	req, _ := http.NewRequest(http.MethodGet, apiBase+"/v1/mappings", nil)
 	req.Header.Set("Accept", "application/json")
+	if tok := os.Getenv("PGW_AGENT_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -297,6 +300,9 @@ func updateMappingState(apiBase, id, state string, port int) error {
 	b, _ := json.Marshal(body)
 	req, _ := http.NewRequest(http.MethodPost, strings.TrimRight(apiBase, "/")+"/v1/mappings/state/"+id,  bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	if tok := os.Getenv("PGW_AGENT_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil { return err }
 	defer resp.Body.Close()

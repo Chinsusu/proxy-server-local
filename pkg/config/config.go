@@ -12,7 +12,7 @@ func getenv(key, def string) string {
 }
 
 type API struct { Addr, JWTSecret string }
-type UI struct { Addr string }
+type UI struct { Addr, JWTSecret string }
 type Health struct { Interval time.Duration }
 type Agent struct { Addr, WANIF, LANIF string }
 type Fwd struct { Addr string }
@@ -20,7 +20,7 @@ type Fwd struct { Addr string }
 func LoadAPI() API {
 	return API{ Addr: getenv("PGW_API_ADDR", ":8080"), JWTSecret: getenv("PGW_JWT_SECRET", "dev-change-me") }
 }
-func LoadUI() UI { return UI{ Addr: getenv("PGW_UI_ADDR", ":8443") } }
+func LoadUI() UI { return UI{ Addr: getenv("PGW_UI_ADDR", ":8081"), JWTSecret: getenv("PGW_JWT_SECRET", "dev-change-me") } }
 func LoadHealth() Health {
 	iv := getenv("PGW_HEALTH_INTERVAL", "30s")
 	d, _ := time.ParseDuration(iv); if d == 0 { d = 30 * time.Second }

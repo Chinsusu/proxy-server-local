@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Chinsusu/proxy-server-local/pkg/auth"
 	"github.com/Chinsusu/proxy-server-local/pkg/check"
 	"github.com/Chinsusu/proxy-server-local/pkg/config"
 	"github.com/Chinsusu/proxy-server-local/pkg/httpx"
@@ -23,6 +24,24 @@ import (
 
 func main() {
 	cfg := config.LoadAPI()
+
+	adminUser := strings.TrimSpace(os.Getenv("PGW_ADMIN_USER"))
+	adminPassHash := strings.TrimSpace(os.Getenv("PGW_ADMIN_PASS_HASH"))
+	adminPass := strings.TrimSpace(os.Getenv("PGW_ADMIN_PASS"))
+	// if plain password provided and no hash, derive once at startup
+	if adminPassHash == "" && adminPass != "" {
+		if h, err := auth.HashPassword(adminPass, auth.DefaultParams()); err == nil {
+			adminPassHash = h
+		}
+	}
+
+	checkAdmin := func(u, p string) bool {
+		if u == "" || p == "" || u != adminUser || adminPassHash == "" {
+			return false
+		}
+		ok, _ := auth.VerifyPassword(adminPassHash, p)
+		return ok
+	}
 
 	// choose store
 	var st store.Store
@@ -53,8 +72,40 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 
+	// ---- Auth ----
+	http.HandleFunc("/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		var req struct{ Username, Password string }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpx.JSON(w, 400, map[string]string{"error": "bad json"})
+			return
+		}
+		if adminUser == "" || adminPassHash == "" {
+			httpx.JSON(w, 503, map[string]string{"error": "admin not configured"})
+			return
+		}
+		if !checkAdmin(req.Username, req.Password) {
+			httpx.JSON(w, 401, map[string]string{"error": "invalid credentials"})
+			return
+		}
+		tok, exp, err := auth.SignJWT(adminUser, "admin", cfg.JWTSecret, 12*time.Hour)
+		if err != nil {
+			logging.Error.Println("sign jwt:", err)
+			httpx.JSON(w, 500, map[string]string{"error": "internal"})
+			return
+		}
+		httpx.JSON(w, 200, map[string]any{"token": tok, "role": "admin", "expires_at": exp.UTC().Format(time.RFC3339)})
+	})
+
 	// ---- Proxies ----
 	http.HandleFunc("/v1/proxies", func(w http.ResponseWriter, r *http.Request) {
+		role, ok := authorizeRequest(r, cfg.JWTSecret)
+		if !ok { httpx.JSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if r.Method != http.MethodGet && !(r.Method==http.MethodPost && role=="agent") && role != "admin" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
+
 		switch r.Method {
 		case http.MethodGet:
 			// Return proxies in a stable order: host asc, port asc, id asc
@@ -85,6 +136,10 @@ func main() {
 	})
 
 	http.HandleFunc("/v1/proxies/", func(w http.ResponseWriter, r *http.Request) {
+		role, ok := authorizeRequest(r, cfg.JWTSecret)
+		if !ok { httpx.JSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if r.Method != http.MethodGet && role != "admin" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
+
 		path := strings.TrimPrefix(r.URL.Path, "/v1/proxies/")
 		// POST /v1/proxies/{id}/check
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/check") {
@@ -160,6 +215,10 @@ func main() {
 
 	// ---- Clients ----
 	http.HandleFunc("/v1/clients", func(w http.ResponseWriter, r *http.Request) {
+		role, ok := authorizeRequest(r, cfg.JWTSecret)
+		if !ok { httpx.JSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if r.Method != http.MethodGet && role != "admin" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
+
 		switch r.Method {
 		case http.MethodGet:
 			httpx.JSON(w, 200, st.ListClients())
@@ -189,6 +248,10 @@ func main() {
 
 	// DELETE /v1/clients/{id}  (cascade delete mappings of this client)
 	http.HandleFunc("/v1/clients/", func(w http.ResponseWriter, r *http.Request) {
+		role, ok := authorizeRequest(r, cfg.JWTSecret)
+		if !ok { httpx.JSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if r.Method != http.MethodGet && role != "admin" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
+
 		if r.Method != http.MethodDelete {
 			w.WriteHeader(405)
 			return
@@ -207,6 +270,10 @@ func main() {
 
 	// ---- Mappings ----
 	http.HandleFunc("/v1/mappings", func(w http.ResponseWriter, r *http.Request) {
+		role, ok := authorizeRequest(r, cfg.JWTSecret)
+		if !ok { httpx.JSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if r.Method != http.MethodGet && role != "admin" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
+
 		switch r.Method {
 		case http.MethodGet:
 			// compute derived state before returning
@@ -318,6 +385,10 @@ func main() {
 
 	// GET /v1/mappings/active -> same as GET /v1/mappings (kept for backward-compat)
 	http.HandleFunc("/v1/mappings/active", func(w http.ResponseWriter, r *http.Request) {
+		role, ok := authorizeRequest(r, cfg.JWTSecret)
+		if !ok { httpx.JSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if r.Method != http.MethodGet && role != "admin" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
+
 		if r.Method != http.MethodGet {
 			w.WriteHeader(405)
 			return
@@ -345,6 +416,11 @@ func main() {
 
 	// Update mapping state: POST /v1/mappings/{id}/state
 	http.HandleFunc("/v1/mappings/state/", func(w http.ResponseWriter, r *http.Request) {
+
+		role, ok := authorizeRequest(r, cfg.JWTSecret)
+		if !ok { httpx.JSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if r.Method != http.MethodGet && role != "admin" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
+
 		if r.Method != http.MethodPost {
 			w.WriteHeader(405)
 			return
@@ -376,6 +452,10 @@ func main() {
 
 	// DELETE /v1/mappings/{id} (hard delete + cleanup)
 	http.HandleFunc("/v1/mappings/", func(w http.ResponseWriter, r *http.Request) {
+		role, ok := authorizeRequest(r, cfg.JWTSecret)
+		if !ok { httpx.JSON(w, 401, map[string]string{"error": "unauthorized"}); return }
+		if r.Method != http.MethodGet && role != "admin" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
+
 		// Skip exact /v1/mappings to avoid conflict with main handler
 		if r.URL.Path == "/v1/mappings" {
 			return
@@ -562,4 +642,22 @@ func ipv4Key(cidr string) uint32 {
 		return ^uint32(0)
 	}
 	return uint32(v4[0])<<24 | uint32(v4[1])<<16 | uint32(v4[2])<<8 | uint32(v4[3])
+}
+
+
+// authorizeRequest extracts JWT from Authorization Bearer or pgw_jwt cookie, verifies and returns role.
+func authorizeRequest(r *http.Request, secret string) (string, bool) {
+	h := strings.TrimSpace(r.Header.Get("Authorization"))
+	var tok string
+	if len(h) >= 7 && strings.ToLower(h[:7]) == "bearer " {
+		tok = strings.TrimSpace(h[7:])
+	}
+	if tok == "" {
+		if c, err := r.Cookie("pgw_jwt"); err == nil { tok = c.Value }
+	}
+	if tok == "" { return "", false }
+	if at := os.Getenv("PGW_AGENT_TOKEN"); at != "" && tok == at { return "agent", true }
+	cl, err := auth.ParseJWT(tok, secret)
+	if err != nil { return "", false }
+	return cl.Role, true
 }

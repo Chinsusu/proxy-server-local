@@ -140,3 +140,21 @@ Danh sách endpoint chi tiết: xem `docs/api.md`.
 ## License
 
 MIT (tùy bạn chọn).
+
+
+---
+
+## Authentication (JWT)
+
+API và UI được bảo vệ bởi JWT.
+
+- Biến môi trường:
+  - `PGW_JWT_SECRET`: khoá ký JWT (bắt buộc).
+  - `PGW_ADMIN_USER` + `PGW_ADMIN_PASS_HASH` (Argon2id PHC) hoặc `PGW_ADMIN_PASS` (không khuyến nghị).
+  - (Tuỳ chọn) `PGW_AGENT_TOKEN`: token nội bộ cho Agent gọi API (được coi là role `agent`).
+- Đăng nhập:
+  - API: `POST /v1/auth/login` với `{username,password}` → trả `{"token":"<JWT>","role":"admin"}`.
+  - UI: `/login` (form), cookie `pgw_jwt` sẽ được set; UI sẽ forward Authorization tới API.
+- Sử dụng API:
+  - Thêm header `Authorization: Bearer <JWT>` cho mọi endpoint (trừ `/v1/health`, `/v1/auth/login`).
+  - Agent có thể POST `/v1/mappings/state` bằng `Authorization: Bearer ${PGW_AGENT_TOKEN}`.

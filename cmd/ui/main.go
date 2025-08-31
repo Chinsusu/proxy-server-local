@@ -11,10 +11,14 @@ import (
 
 	"github.com/Chinsusu/proxy-server-local/pkg/config"
 	"log"
+	"encoding/json"
+	"time"
+	"github.com/Chinsusu/proxy-server-local/pkg/auth"
 )
 
 var (
 	baseAPI   string
+	jwtSecret string
 	baseAgent string
 	webDir    string
 )
@@ -37,6 +41,8 @@ func main() {
 		baseAgent = "http://127.0.0.1:9090/agent"
 	}
 
+	jwtSecret = cfg.JWTSecret
+
 	// Determine web directory path
 	webDir = "/usr/local/share/pgw/web"
 	if _, err := os.Stat(webDir); os.IsNotExist(err) {
@@ -48,6 +54,8 @@ func main() {
 	http.HandleFunc("/", handleRoot)
 	http.HandleFunc("/manage", handleManage)
 	http.HandleFunc("/proxies", handleProxies)
+	http.HandleFunc("/login", handleLogin)
+	http.HandleFunc("/logout", handleLogout)
 	http.HandleFunc("/static/", handleStatic)
 
 	// API proxy
@@ -79,14 +87,17 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !uiAuthorized(r) { http.Redirect(w, r, "/login", http.StatusFound); return }
 	serveHTML(w, r, "dashboard.html")
 }
 
 func handleProxies(w http.ResponseWriter, r *http.Request) {
+	if !uiAuthorized(r) { http.Redirect(w, r, "/login", http.StatusFound); return }
 	serveHTML(w, r, "proxies.html")
 }
 
 func handleManage(w http.ResponseWriter, r *http.Request) {
+	if !uiAuthorized(r) { http.Redirect(w, r, "/login", http.StatusFound); return }
 	serveHTML(w, r, "manage.html")
 }
 
@@ -188,6 +199,11 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, prefix, upstream strin
 		return
 	}
 	req.Header = r.Header.Clone()
+	if req.Header.Get("Authorization") == "" {
+		if c, err := r.Cookie("pgw_jwt"); err == nil && c.Value != "" {
+			req.Header.Set("Authorization", "Bearer "+c.Value)
+		}
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -202,6 +218,72 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, prefix, upstream strin
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 }
+
+
+
+// ----- UI auth -----
+func uiAuthorized(r *http.Request) bool {
+    c, err := r.Cookie("pgw_jwt")
+    if err != nil || c.Value == "" { return false }
+    cl, err := auth.ParseJWT(c.Value, jwtSecret)
+    if err != nil { return false }
+    return cl != nil && cl.ExpiresAt != nil && cl.ExpiresAt.Time.After(time.Now())
+}
+
+func handleLogin(w http.ResponseWriter, r *http.Request) {
+    switch r.Method {
+    case http.MethodGet:
+        w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        io.WriteString(w, embeddedLogin)
+    case http.MethodPost:
+        var reqBody struct{ Username, Password string }
+        if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil { http.Error(w, "bad json", 400); return }
+        api := strings.TrimSuffix(baseAPI, "/") + "/v1/auth/login"
+        jr, _ := http.NewRequest(http.MethodPost, api, strings.NewReader(string(mustJSON(reqBody))))
+        jr.Header.Set("Content-Type", "application/json")
+        resp, err := http.DefaultClient.Do(jr)
+        if err != nil { http.Error(w, "upstream", 502); return }
+        defer resp.Body.Close()
+        if resp.StatusCode != 200 { w.WriteHeader(resp.StatusCode); io.Copy(w, resp.Body); return }
+        var out struct{ Token string `json:"token"` }
+        if err := json.NewDecoder(resp.Body).Decode(&out); err != nil { http.Error(w, "bad upstream", 502); return }
+        http.SetCookie(w, &http.Cookie{Name: "pgw_jwt", Value: out.Token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
+        w.WriteHeader(204)
+    default:
+        w.WriteHeader(405)
+    }
+}
+
+func handleLogout(w http.ResponseWriter, r *http.Request) {
+    http.SetCookie(w, &http.Cookie{Name: "pgw_jwt", Value: "", Path: "/", Expires: time.Unix(0,0), MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+    http.Redirect(w, r, "/login", http.StatusFound)
+}
+
+func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
+
+const embeddedLogin = `
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>PGW Login</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"></head>
+<body class="bg-dark text-light"><div class="container py-5" style="max-width:480px">
+  <h3 class="mb-3">PGW Login</h3>
+  <div id="alert" class="alert alert-danger d-none"></div>
+  <form id="f" class="card card-body bg-secondary-subtle">
+    <div class="mb-3"><label class="form-label">Username</label><input class="form-control" name="u" required></div>
+    <div class="mb-3"><label class="form-label">Password</label><input type="password" class="form-control" name="p" required></div>
+    <button class="btn btn-primary w-100" type="submit">Sign in</button>
+  </form>
+</div>
+<script>
+const f=document.getElementById("f");
+f.addEventListener('submit', async (e)=>{e.preventDefault();
+  const b={username:f.u.value,password:f.p.value};
+  const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+  if(r.status===204){window.location.replace('/');return;}
+  const t=await r.text(); const a=document.getElementById('alert'); a.classList.remove('d-none'); a.textContent=t||'Login failed';
+});
+</script>
+</body></html>`
 
 // Embedded templates (fallback when web directory doesn't exist)
 const embeddedDashboard = `
