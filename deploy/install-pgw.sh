@@ -154,6 +154,5 @@ notes(){ install -d -m 0755 /etc/pgw; date -Is > /etc/pgw/INSTALL_NOTES.txt; ech
 main(){ need_root; ensure_packages; ensure_sysctl; install_go; clone_repo; build_install; install_web; ensure_user; write_env; conf_dns; units; start_fwds; notes; echo "OK: install done."; }
 
 main "$@"
-EOSH
 chmod +x deploy/install-pgw.sh
 sed -n 1,200p deploy/install-pgw.sh
