@@ -1,5 +1,12 @@
 # PGW Quick Operations Checklist (Ubuntu 22.04)
 
+0) One-click install
+
+Ubuntu 22.04 – run:
+
+
+
+
 1) System prep
 - Ensure packages: nftables, dnsmasq
 - Sysctl: /etc/sysctl.d/99-pgw.conf
