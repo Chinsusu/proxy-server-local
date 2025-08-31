@@ -17,7 +17,7 @@ net.ipv4.ip_forward=1
 net.ipv4.conf.all.rp_filter=0
 net.ipv4.conf.default.rp_filter=0
 CONF
-; sysctl --system || true; }
+sysctl --system || true; }
 
 install_go(){
   local URL=https://go.dev/dl/go1.23.2.linux-amd64.tar.gz
@@ -65,7 +65,7 @@ server=8.8.8.8
 cache-size=500
 filter-AAAA
 CONF
-; systemctl enable --now dnsmasq || true; }
+systemctl enable --now dnsmasq || true; }
 
 units(){ cat >/etc/systemd/system/pgw-api.service <<U
 [Unit]
