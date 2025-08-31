@@ -14,7 +14,7 @@ Kiến trúc gồm 4 thành phần:
 
 ## Nhanh gọn để chạy thử
 
-Yêu cầu: Go ≥ 1.21, Linux có `nft` (nftables), systemd.
+Yêu cầu: Go ≥ 1.22, Linux có `nft` (nftables), systemd.
 
 ```bash
 # Build từng thành phần
@@ -139,7 +139,7 @@ Danh sách endpoint chi tiết: xem `docs/api.md`.
 
 ## License
 
-MIT (tùy bạn chọn).
+AGPL-3.0
 
 
 ---
@@ -158,3 +158,5 @@ API và UI được bảo vệ bởi JWT.
 - Sử dụng API:
   - Thêm header `Authorization: Bearer <JWT>` cho mọi endpoint (trừ `/v1/health`, `/v1/auth/login`).
   - Agent có thể POST `/v1/mappings/state` bằng `Authorization: Bearer ${PGW_AGENT_TOKEN}`.
+
+See docs/QUICK_OPS.md for a quick operations checklist.

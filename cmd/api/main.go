@@ -138,7 +138,7 @@ func main() {
 	http.HandleFunc("/v1/proxies/", func(w http.ResponseWriter, r *http.Request) {
 		role, ok := authorizeRequest(r, cfg.JWTSecret)
 		if !ok { httpx.JSON(w, 401, map[string]string{"error": "unauthorized"}); return }
-		if r.Method != http.MethodGet && role != "admin" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
+		if r.Method != http.MethodGet && role != "admin" && role != "agent" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
 
 		path := strings.TrimPrefix(r.URL.Path, "/v1/proxies/")
 		// POST /v1/proxies/{id}/check
@@ -419,7 +419,7 @@ func main() {
 
 		role, ok := authorizeRequest(r, cfg.JWTSecret)
 		if !ok { httpx.JSON(w, 401, map[string]string{"error": "unauthorized"}); return }
-		if r.Method != http.MethodGet && role != "admin" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
+		if r.Method != http.MethodGet && role != "admin" && role != "agent" { httpx.JSON(w, 403, map[string]string{"error": "forbidden"}); return }
 
 		if r.Method != http.MethodPost {
 			w.WriteHeader(405)

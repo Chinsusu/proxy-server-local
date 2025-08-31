@@ -39,6 +39,9 @@ func env(k, def string) string {
 func resolveUpstream(apiBase string, localPort int) (*upstream, error) {
 	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(apiBase, "/")+"/v1/mappings/active", nil)
 	req.Header.Set("Accept", "application/json")
+	if tok := os.Getenv("PGW_AGENT_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch mappings: %w", err)

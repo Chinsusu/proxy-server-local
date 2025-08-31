@@ -173,9 +173,7 @@ func renderRules(cfg cfgAgent, mvs []types.MappingView) string {
 	all := []rule{}
 	for _, mv := range mvs {
 		// Only allow traffic for mappings that are explicitly APPLIED
-		if strings.ToUpper(mv.State) != "APPLIED" {
-			continue
-		}
+		s:=strings.ToUpper(mv.State); if s != "APPLIED" && s != "PENDING" { continue }
 		pfx, bits, ok := parseIPv4Prefix(mv.Client.IPCidr)
 		if !ok || mv.LocalRedirectPort <= 0 {
 			continue

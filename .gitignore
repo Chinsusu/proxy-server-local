@@ -7,4 +7,4 @@ bin/
 .idea/
 .DS_Store
 dist/
-ui
+/ui

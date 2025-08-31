@@ -157,6 +157,8 @@ func serveEmbeddedHTML(w http.ResponseWriter, r *http.Request, filename string) 
 		io.WriteString(w, embeddedDashboard)
 	case "manage.html":
 		io.WriteString(w, embeddedManage)
+    case "proxies.html":
+        io.WriteString(w, embeddedProxies)
 	default:
 		http.NotFound(w, r)
 	}
