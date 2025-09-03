@@ -214,7 +214,7 @@ func main() {
 					}
 					if !stillUsed {
 						_ = os.Remove(fmt.Sprintf("/var/lib/pgw/ports/%d", port))
-						_ = exec.Command("systemctl", "stop", fmt.Sprintf("pgw-fwd@%d", port)).Run()
+						_ = exec.Command("sudo", "systemctl", "stop", fmt.Sprintf("pgw-fwd@%d", port)).Run()
 					}
 				}
 				_ = reconcileNow()
@@ -383,7 +383,7 @@ func main() {
 				_ = os.MkdirAll("/var/lib/pgw/ports", 0o755)
 				_ = os.WriteFile(fmt.Sprintf("/var/lib/pgw/ports/%d", mv.LocalRedirectPort), []byte(""), 0o644)
 				// Restart regardless of preUsed to ensure the forwarder switches to the new upstream mapping.
-				_ = exec.Command("systemctl", "restart", fmt.Sprintf("pgw-fwd@%d", mv.LocalRedirectPort)).Run()
+				_ = exec.Command("sudo", "systemctl", "restart", fmt.Sprintf("pgw-fwd@%d", mv.LocalRedirectPort)).Run()
 			}
 
 			// Apply: reconcile then mark APPLIED
@@ -542,7 +542,7 @@ func main() {
 				}
 				if !stillUsed {
 					_ = os.Remove(fmt.Sprintf("/var/lib/pgw/ports/%d", port))
-					_ = exec.Command("systemctl", "stop", fmt.Sprintf("pgw-fwd@%d", port)).Run()
+					_ = exec.Command("sudo", "systemctl", "stop", fmt.Sprintf("pgw-fwd@%d", port)).Run()
 				}
 				_ = reconcileNow()
 			}(port)
