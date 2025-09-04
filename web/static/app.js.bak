@@ -363,28 +363,15 @@ class PGWManager {
       select.appendChild(option);
     });
   }
-  detectProxyType(originalLine, host, port) {
-    // Check for explicit type prefix
-    if (originalLine.includes("socks5://")) return "socks5";
-    if (originalLine.includes("http://")) return "http";
-    
-    // Auto-detect based on common SOCKS5 ports
-    const socksCommonPorts = [1080, 9050, 9150];
-    if (socksCommonPorts.includes(port)) return "socks5";
-    
-    // Default to HTTP
-    return "http";
-  }
-
   parseProxyLine(line) {
-    const cleanLine = line.replace(/^(https?|socks5):\/\//, ''); const m = cleanLine.trim().match(/^([^:\s]+):(\d{1,5}):([^:]*):([^:]*)$/);
+    const m = line.trim().match(/^([^:\s]+):(\d{1,5}):([^:]*):([^:]*)$/);
     if (!m) return null;
     const host = m[1];
     const port = parseInt(m[2], 10);
     const username = m[3] || "";
     const password = m[4] || "";
     if (!host || !port || port <= 0 || port > 65535) return null;
-    return { type: this.detectProxyType(line, host, port), host, port, username, password, enabled: true };
+    return { type: "http", host, port, username, password, enabled: true };
   }
 
   async importProxies() {

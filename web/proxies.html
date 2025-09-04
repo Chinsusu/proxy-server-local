@@ -63,7 +63,7 @@
           <div class="col-12 col-md-10">
             <label class="form-label">Bulk import (IP:PORT:USER:PASSWORD, one per line)</label>
             <textarea id="import-proxies" class="form-control" rows="4" placeholder="192.0.2.10:8080:alice:s3cret&#10;198.51.100.22:3128:bob:pass123"></textarea>
-            <div class="form-text">Format defaults to HTTP proxies. Use individual form for SOCKS5 proxies.</div>
+            <div class="form-text">Supports auto-detection: IP:PORT:USER:PASS (HTTP), socks5://IP:PORT:USER:PASS (SOCKS5), ports 1080/9050/9150 → SOCKS5</div>
           </div>
           <div class="col-12 col-lg-1 d-flex align-items-center">
             <button id="btn-import-proxies" class="btn btn-secondary btn-sm text-nowrap">Import</button>
