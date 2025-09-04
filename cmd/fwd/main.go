@@ -23,6 +23,7 @@ import (
 const SO_ORIGINAL_DST = 80
 
 type upstream struct {
+	Type string
 	Host string
 	Port int
 	User string
@@ -66,6 +67,7 @@ func resolveUpstream(apiBase string, localPort int) (*upstream, error) {
 				pass = *mv.Proxy.Password
 			}
 			return &upstream{
+				Type: mv.Proxy.Type,
 				Host: mv.Proxy.Host,
 				Port: mv.Proxy.Port,
 				User: user,
@@ -108,54 +110,107 @@ func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 	return &net.TCPAddr{IP: ip, Port: port}, nil
 }
 
-func dialViaProxy(up *upstream, dst *net.TCPAddr) (net.Conn, error) {
-	proxyAddr := fmt.Sprintf("%s:%d", up.Host, up.Port)
-	pc, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("dial proxy %s: %w", proxyAddr, err)
-	}
-	dstHP := net.JoinHostPort(dst.IP.String(), fmt.Sprintf("%d", dst.Port))
-	auth := ""
-	if up.User != "" || up.Pass != "" {
-		b64 := base64.StdEncoding.EncodeToString([]byte(up.User + ":" + up.Pass))
-		auth = "Proxy-Authorization: Basic " + b64 + "\r\n"
-	}
-	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n%sProxy-Connection: Keep-Alive\r\nConnection: Keep-Alive\r\n\r\n",
-		dstHP, dstHP, auth)
-	if _, err := io.WriteString(pc, req); err != nil {
-		pc.Close()
-		return nil, fmt.Errorf("write CONNECT: %w", err)
-	}
-	br := bufio.NewReader(pc)
-	status, err := br.ReadString('\n')
-	if err != nil {
-		pc.Close()
-		return nil, fmt.Errorf("read CONNECT status: %w", err)
-	}
-	if !strings.HasPrefix(status, "HTTP/1.1 200") && !strings.HasPrefix(status, "HTTP/1.0 200") {
-		// drain headers
-		for {
-			line, e := br.ReadString('\n')
-			if e != nil || line == "\r\n" {
-				break
-			}
-		}
-		pc.Close()
-		return nil, fmt.Errorf("proxy refused CONNECT: %s", strings.TrimSpace(status))
-	}
-	// consume remaining headers
-	for {
-		line, e := br.ReadString('\n')
-		if e != nil {
-			pc.Close()
-			return nil, fmt.Errorf("read headers: %w", e)
-		}
-		if line == "\r\n" {
-			break
-		}
-	}
-	return pc, nil
+
+func dialViaHTTP(up *upstream, dst *net.TCPAddr) (net.Conn, error) {
+    proxyAddr := fmt.Sprintf("%s:%d", up.Host, up.Port)
+    pc, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+    if err != nil {
+        return nil, fmt.Errorf("dial proxy %s: %w", proxyAddr, err)
+    }
+    dstHP := net.JoinHostPort(dst.IP.String(), fmt.Sprintf("%d", dst.Port))
+    auth := ""
+    if up.User != "" || up.Pass != "" {
+        b64 := base64.StdEncoding.EncodeToString([]byte(up.User + ":" + up.Pass))
+        auth = "Proxy-Authorization: Basic " + b64 + "\r\n"
+    }
+    req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n%sProxy-Connection: Keep-Alive\r\nConnection: Keep-Alive\r\n\r\n", dstHP, dstHP, auth)
+    if _, err := io.WriteString(pc, req); err != nil {
+        pc.Close()
+        return nil, fmt.Errorf("write CONNECT: %w", err)
+    }
+    br := bufio.NewReader(pc)
+    status, err := br.ReadString('\n')
+    if err != nil {
+        pc.Close()
+        return nil, fmt.Errorf("read CONNECT status: %w", err)
+    }
+    if !strings.HasPrefix(status, "HTTP/1.1 200") && !strings.HasPrefix(status, "HTTP/1.0 200") {
+        for {
+            line, e := br.ReadString('\n')
+            if e != nil || line == "\r\n" {
+                break
+            }
+        }
+        pc.Close()
+        return nil, fmt.Errorf("proxy refused CONNECT: %s", strings.TrimSpace(status))
+    }
+    for {
+        line, e := br.ReadString('\n')
+        if e != nil {
+            pc.Close()
+            return nil, fmt.Errorf("read headers: %w", e)
+        }
+        if line == "\r\n" {
+            break
+        }
+    }
+    return pc, nil
 }
+
+func dialViaSOCKS5(up *upstream, dst *net.TCPAddr) (net.Conn, error) {
+    proxyAddr := fmt.Sprintf("%s:%d", up.Host, up.Port)
+    pc, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+    if err != nil {
+        return nil, fmt.Errorf("dial socks5 %s: %w", proxyAddr, err)
+    }
+    // greeting
+    methods := []byte{0x00}
+    if up.User != "" || up.Pass != "" { methods = []byte{0x00, 0x02} }
+    if _, err := pc.Write([]byte{0x05, byte(len(methods))}); err != nil { pc.Close(); return nil, err }
+    if _, err := pc.Write(methods); err != nil { pc.Close(); return nil, err }
+    sel := make([]byte, 2)
+    if _, err := io.ReadFull(pc, sel); err != nil { pc.Close(); return nil, err }
+    if sel[0] != 0x05 { pc.Close(); return nil, fmt.Errorf("bad ver") }
+    if sel[1] == 0xff { pc.Close(); return nil, fmt.Errorf("no acceptable auth") }
+    if sel[1] == 0x02 {
+        u := []byte(up.User); p := []byte(up.Pass)
+        if len(u) > 255 || len(p) > 255 { pc.Close(); return nil, fmt.Errorf("cred too long") }
+        pkt := append([]byte{0x01, byte(len(u))}, u...)
+        pkt = append(pkt, byte(len(p)))
+        pkt = append(pkt, p...)
+        if _, err := pc.Write(pkt); err != nil { pc.Close(); return nil, err }
+        rp := make([]byte, 2)
+        if _, err := io.ReadFull(pc, rp); err != nil { pc.Close(); return nil, err }
+        if rp[1] != 0x00 { pc.Close(); return nil, fmt.Errorf("auth failed") }
+    }
+    // connect to destination (IPv4 only)
+    ip4 := dst.IP.To4()
+    if ip4 == nil { pc.Close(); return nil, fmt.Errorf("only IPv4 dst supported") }
+    req := []byte{0x05, 0x01, 0x00, 0x01, ip4[0], ip4[1], ip4[2], ip4[3], byte(dst.Port>>8), byte(dst.Port)}
+    if _, err := pc.Write(req); err != nil { pc.Close(); return nil, err }
+    hdr := make([]byte, 4)
+    if _, err := io.ReadFull(pc, hdr); err != nil { pc.Close(); return nil, err }
+    if hdr[1] != 0x00 { pc.Close(); return nil, fmt.Errorf("socks connect failed REP=0x%02x", hdr[1]) }
+    var toRead int
+    switch hdr[3] {
+    case 0x01: toRead = 4 + 2
+    case 0x03:
+        lb := make([]byte,1); if _,err:=io.ReadFull(pc,lb); err!=nil { pc.Close(); return nil, err }
+        toRead = int(lb[0]) + 2
+    case 0x04: toRead = 16 + 2
+    default: pc.Close(); return nil, fmt.Errorf("bad ATYP")
+    }
+    junk := make([]byte, toRead)
+    if _, err := io.ReadFull(pc, junk); err != nil { pc.Close(); return nil, err }
+    return pc, nil
+}
+
+func dialViaProxy(up *upstream, dst *net.TCPAddr) (net.Conn, error) {
+    t := strings.ToLower(strings.TrimSpace(up.Type))
+    if t == "socks5" || t == "socks" { return dialViaSOCKS5(up, dst) }
+    return dialViaHTTP(up, dst)
+}
+
 
 func parseHTTPHost(b []byte) (string, bool) {
 	// read up to first \r\n\r\n
@@ -335,10 +390,10 @@ func handleConn(c net.Conn, up *upstream) {
 
 	if host != "" {
 		logging.Info.Printf("[fwd] %s -> %s host=%s via %s:%d OK",
-			c.RemoteAddr().String(), dst.String(), maskHost(host), up.Host, up.Port)
+			c.RemoteAddr().String(), dst.String(), maskHost(host), up.Type, up.Host, up.Port)
 	} else {
 		logging.Info.Printf("[fwd] %s -> %s via %s:%d OK",
-			c.RemoteAddr().String(), dst.String(), up.Host, up.Port)
+			c.RemoteAddr().String(), dst.String(), up.Type, up.Host, up.Port)
 	}
 
 	// splice both directions
@@ -363,7 +418,7 @@ func main() {
 	if err != nil {
 		logging.Error.Fatalf("[fwd] listen %s: %v", addr, err)
 	}
-	logging.Info.Printf("pgw-fwd listening %s (transparent CONNECT+SNI) → proxy %s:%d", addr, up.Host, up.Port)
+	logging.Info.Printf("pgw-fwd listening %s (transparent CONNECT+SNI) → %s %s:%d", addr, up.Type, up.Host, up.Port)
 
 	for {
 		c, err := ln.Accept()
