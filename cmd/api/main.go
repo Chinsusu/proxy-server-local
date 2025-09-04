@@ -128,10 +128,17 @@ func main() {
 			})
 			httpx.JSON(w, 200, ps)
 		case http.MethodPost:
-			logging.Info.Printf("[DEBUG] POST /v1/mappings called")
+			logging.Info.Printf("[DEBUG] POST /v1/proxies called")
 			var p types.Proxy
 			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 				httpx.JSON(w, 400, map[string]string{"error": "bad json"})
+				return
+			}
+
+			// Check for duplicate proxy
+			existingProxies := st.ListProxies()
+			if isProxyDuplicate(p, existingProxies) {
+				httpx.JSON(w, 409, map[string]string{"error": "proxy already exists with same host, port, username, and password"})
 				return
 			}
 			p = st.CreateProxy(p)
@@ -707,4 +714,37 @@ func authorizeRequest(r *http.Request, secret string) (string, bool) {
 		return "", false
 	}
 	return cl.Role, true
+}
+
+// Helper function to check if proxy is duplicate based on Host, Port, Username, Password
+func isProxyDuplicate(new types.Proxy, existing []types.Proxy) bool {
+	for _, p := range existing {
+		if p.Host == new.Host && p.Port == new.Port {
+			// Compare username - handle nil pointers
+			newUser := ""
+			existingUser := ""
+			if new.Username != nil {
+				newUser = *new.Username
+			}
+			if p.Username != nil {
+				existingUser = *p.Username
+			}
+			
+			// Compare password - handle nil pointers  
+			newPass := ""
+			existingPass := ""
+			if new.Password != nil {
+				newPass = *new.Password
+			}
+			if p.Password != nil {
+				existingPass = *p.Password
+			}
+			
+			// If host, port, username, and password all match, it's a duplicate
+			if newUser == existingUser && newPass == existingPass {
+				return true
+			}
+		}
+	}
+	return false
 }
