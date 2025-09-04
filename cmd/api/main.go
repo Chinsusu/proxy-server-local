@@ -135,6 +135,12 @@ func main() {
 				return
 			}
 
+
+			// Validate proxy type
+			if err := validateProxyType(p.Type); err != nil {
+				httpx.JSON(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
 			// Check for duplicate proxy
 			existingProxies := st.ListProxies()
 			if isProxyDuplicate(p, existingProxies) {
@@ -176,12 +182,17 @@ func main() {
 				httpx.JSON(w, 404, map[string]string{"error": "not found"})
 				return
 			}
-			if target.Type != "http" {
-				httpx.JSON(w, 400, map[string]string{"error": "only http supported in this patch"})
+			if target.Type != "http" && target.Type != "socks5" {
+				httpx.JSON(w, 400, map[string]string{"error": "only http and socks5 supported"})
 				return
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-			res := check.CheckHTTP(ctx, target.Host, target.Port, target.Username, target.Password)
+			var res check.Result
+			if target.Type == "socks5" {
+				res = check.CheckSOCKS5(ctx, target.Host, target.Port, target.Username, target.Password)
+			} else {
+				res = check.CheckHTTP(ctx, target.Host, target.Port, target.Username, target.Password)
+			}
 			cancel()
 			if res.Err != nil {
 				st.SetProxyTelemetry(target.ID, types.StatusDown, 0, "")
@@ -373,7 +384,12 @@ func main() {
 				return
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-			res := check.CheckHTTP(ctx, mv.Proxy.Host, mv.Proxy.Port, mv.Proxy.Username, mv.Proxy.Password)
+			var res check.Result
+			if mv.Proxy.Type == "socks5" {
+				res = check.CheckSOCKS5(ctx, mv.Proxy.Host, mv.Proxy.Port, mv.Proxy.Username, mv.Proxy.Password)
+			} else {
+				res = check.CheckHTTP(ctx, mv.Proxy.Host, mv.Proxy.Port, mv.Proxy.Username, mv.Proxy.Password)
+			}
 			cancel()
 			if res.Err != nil {
 				st.SetProxyTelemetry(mv.Proxy.ID, types.StatusDown, 0, "")
@@ -579,11 +595,16 @@ func reconcileNow() error {
 
 func runHealthTick(st store.Store) {
 	for _, p := range st.ListProxies() {
-		if p.Type != "http" {
+		if p.Type != "http" && p.Type != "socks5" {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-		res := check.CheckHTTP(ctx, p.Host, p.Port, p.Username, p.Password)
+		var res check.Result
+		if p.Type == "socks5" {
+			res = check.CheckSOCKS5(ctx, p.Host, p.Port, p.Username, p.Password)
+		} else {
+			res = check.CheckHTTP(ctx, p.Host, p.Port, p.Username, p.Password)
+		}
 		cancel()
 		if res.Err != nil {
 			st.SetProxyTelemetry(p.ID, types.StatusDown, 0, "")
@@ -747,4 +768,16 @@ func isProxyDuplicate(new types.Proxy, existing []types.Proxy) bool {
 		}
 	}
 	return false
+}
+
+// validateProxyType validates proxy type field
+func validateProxyType(proxyType string) error {
+	switch proxyType {
+	case "http", "socks5":
+		return nil
+	case "":
+		return fmt.Errorf("proxy type is required")
+	default:
+		return fmt.Errorf("unsupported proxy type: %s (supported: http, socks5)", proxyType)
+	}
 }
