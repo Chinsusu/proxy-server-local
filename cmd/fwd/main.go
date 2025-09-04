@@ -23,6 +23,7 @@ import (
 const SO_ORIGINAL_DST = 80
 
 type upstream struct {
+	Type string
 	Host string
 	Port int
 	User string
@@ -66,6 +67,7 @@ func resolveUpstream(apiBase string, localPort int) (*upstream, error) {
 				pass = *mv.Proxy.Password
 			}
 			return &upstream{
+				Type: mv.Proxy.Type,
 				Host: mv.Proxy.Host,
 				Port: mv.Proxy.Port,
 				User: user,
@@ -155,6 +157,171 @@ func dialViaProxy(up *upstream, dst *net.TCPAddr) (net.Conn, error) {
 		}
 	}
 	return pc, nil
+}
+
+func dialViaSOCKS5(up *upstream, dst *net.TCPAddr) (net.Conn, error) {
+	proxyAddr := fmt.Sprintf("%s:%d", up.Host, up.Port)
+	pc, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("dial SOCKS5 proxy %s: %w", proxyAddr, err)
+	}
+
+	// SOCKS5 handshake
+	if err := socks5Handshake(pc, up.User, up.Pass); err != nil {
+		pc.Close()
+		return nil, fmt.Errorf("SOCKS5 handshake failed: %w", err)
+	}
+
+	// SOCKS5 connect request
+	if err := socks5Connect(pc, dst.IP.String(), dst.Port); err != nil {
+		pc.Close()
+		return nil, fmt.Errorf("SOCKS5 connect failed: %w", err)
+	}
+
+	return pc, nil
+}
+
+func socks5Handshake(conn net.Conn, username, password string) error {
+	// Send greeting with auth methods
+	greeting := []byte{0x05} // SOCKS version 5
+	
+	if username != "" || password != "" {
+		// Support both no-auth and username/password auth
+		greeting = append(greeting, 0x02, 0x00, 0x02) // 2 methods: no-auth, username/pass
+	} else {
+		// Only support no-auth
+		greeting = append(greeting, 0x01, 0x00) // 1 method: no-auth
+	}
+	
+	if _, err := conn.Write(greeting); err != nil {
+		return err
+	}
+	
+	// Read server response
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		return err
+	}
+	
+	if resp[0] != 0x05 {
+		return fmt.Errorf("invalid SOCKS5 version: %d", resp[0])
+	}
+	
+	// Handle authentication method
+	switch resp[1] {
+	case 0x00: // No authentication required
+		return nil
+	case 0x02: // Username/password authentication
+		if username == "" && password == "" {
+			return fmt.Errorf("server requires authentication but no credentials provided")
+		}
+		return socks5Auth(conn, username, password)
+	case 0xFF: // No acceptable methods
+		return fmt.Errorf("no acceptable authentication methods")
+	default:
+		return fmt.Errorf("unsupported authentication method: %d", resp[1])
+	}
+}
+
+func socks5Auth(conn net.Conn, username, password string) error {
+	if len(username) > 255 || len(password) > 255 {
+		return fmt.Errorf("username or password too long")
+	}
+	
+	req := []byte{0x01} // auth version
+	req = append(req, byte(len(username)))
+	req = append(req, []byte(username)...)
+	req = append(req, byte(len(password)))
+	req = append(req, []byte(password)...)
+	
+	if _, err := conn.Write(req); err != nil {
+		return err
+	}
+	
+	// Read auth response
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		return err
+	}
+	
+	if resp[0] != 0x01 {
+		return fmt.Errorf("invalid auth response version: %d", resp[0])
+	}
+	
+	if resp[1] != 0x00 {
+		return fmt.Errorf("authentication failed")
+	}
+	
+	return nil
+}
+
+func socks5Connect(conn net.Conn, host string, port int) error {
+	// Build connect request
+	req := []byte{0x05, 0x01, 0x00} // ver, cmd=connect, reserved
+	
+	// Address type and address
+	if ip := net.ParseIP(host); ip != nil {
+		if ip4 := ip.To4(); ip4 != nil {
+			// IPv4
+			req = append(req, 0x01)
+			req = append(req, ip4...)
+		} else {
+			// IPv6
+			req = append(req, 0x04)
+			req = append(req, ip...)
+		}
+	} else {
+		// Domain name
+		if len(host) > 255 {
+			return fmt.Errorf("domain name too long")
+		}
+		req = append(req, 0x03)
+		req = append(req, byte(len(host)))
+		req = append(req, []byte(host)...)
+	}
+	
+	// Port (2 bytes, big endian)
+	req = append(req, byte(port>>8), byte(port&0xff))
+	
+	if _, err := conn.Write(req); err != nil {
+		return err
+	}
+	
+	// Read connect response
+	resp := make([]byte, 4)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		return err
+	}
+	
+	if resp[0] != 0x05 {
+		return fmt.Errorf("invalid SOCKS5 response version: %d", resp[0])
+	}
+	
+	if resp[1] != 0x00 {
+		return fmt.Errorf("SOCKS5 connect failed with code: %d", resp[1])
+	}
+	
+	// Skip bound address (we don't need it for our use case)
+	switch resp[3] {
+	case 0x01: // IPv4
+		if _, err := io.ReadFull(conn, make([]byte, 4+2)); err != nil {
+			return err
+		}
+	case 0x03: // Domain name
+		length := make([]byte, 1)
+		if _, err := io.ReadFull(conn, length); err != nil {
+			return err
+		}
+		if _, err := io.ReadFull(conn, make([]byte, int(length[0])+2)); err != nil {
+			return err
+		}
+	case 0x04: // IPv6
+		if _, err := io.ReadFull(conn, make([]byte, 16+2)); err != nil {
+			return err
+		}
+	}
+	
+	return nil
 }
 
 func parseHTTPHost(b []byte) (string, bool) {
@@ -308,9 +475,15 @@ func handleConn(c net.Conn, up *upstream) {
 		return
 	}
 
-	pc, err := dialViaProxy(up, dst)
+	var pc net.Conn
+	if up.Type == "socks5" {
+		pc, err = dialViaSOCKS5(up, dst)
+	} else {
+		pc, err = dialViaProxy(up, dst)
+	}
+
 	if err != nil {
-		logging.Error.Printf("[fwd] CONNECT %s via %s:%d failed: %v", dst.String(), up.Host, up.Port, err)
+		logging.Error.Printf("[fwd] CONNECT %s via %s %s:%d failed: %v", dst.String(), up.Type, up.Host, up.Port, err)
 		return
 	}
 
@@ -334,11 +507,11 @@ func handleConn(c net.Conn, up *upstream) {
 	}
 
 	if host != "" {
-		logging.Info.Printf("[fwd] %s -> %s host=%s via %s:%d OK",
-			c.RemoteAddr().String(), dst.String(), maskHost(host), up.Host, up.Port)
+		logging.Info.Printf("[fwd] %s -> %s host=%s via %s %s:%d OK",
+			c.RemoteAddr().String(), dst.String(), maskHost(host), up.Type, up.Host, up.Port)
 	} else {
-		logging.Info.Printf("[fwd] %s -> %s via %s:%d OK",
-			c.RemoteAddr().String(), dst.String(), up.Host, up.Port)
+		logging.Info.Printf("[fwd] %s -> %s via %s %s:%d OK",
+			c.RemoteAddr().String(), dst.String(), up.Type, up.Host, up.Port)
 	}
 
 	// splice both directions
@@ -363,7 +536,7 @@ func main() {
 	if err != nil {
 		logging.Error.Fatalf("[fwd] listen %s: %v", addr, err)
 	}
-	logging.Info.Printf("pgw-fwd listening %s (transparent CONNECT+SNI) → proxy %s:%d", addr, up.Host, up.Port)
+	logging.Info.Printf("pgw-fwd listening %s (transparent CONNECT+SNI) → %s proxy %s:%d", addr, up.Type, up.Host, up.Port)
 
 	for {
 		c, err := ln.Accept()
