@@ -11,7 +11,7 @@ FWD_MAX=15050
 need_root() { if [[ $EUID -ne 0 ]]; then echo "Run as root" >&2; exit 1; fi; }
 have_cmd(){ command -v "$1" >/dev/null 2>&1; }
 
-ensure_packages(){ export DEBIAN_FRONTEND=noninteractive; apt-get update -y; apt-get install -y curl ca-certificates git jq nftables dnsmasq build-essential; }
+ensure_packages(){ export DEBIAN_FRONTEND=noninteractive; apt-get update -y; apt-get install -y curl ca-certificates git jq nftables dnsmasq build-essential sudo; }
 ensure_sysctl(){ install -d -m 0755 /etc/sysctl.d; cat >/etc/sysctl.d/99-pgw.conf <<CONF
 net.ipv4.ip_forward=1
 net.ipv4.conf.all.rp_filter=0
@@ -35,6 +35,36 @@ build_install(){ local G=/usr/local/go/bin/go; (cd "$REPO_DIR"; mkdir -p bin; "$
 install_web(){ install -d -m 0755 /usr/local/share/pgw/web/static; cp -f "$REPO_DIR"/web/*.html /usr/local/share/pgw/web/; cp -f "$REPO_DIR"/web/static/* /usr/local/share/pgw/web/static/; }
 
 ensure_user(){ id pgw >/dev/null 2>&1 || useradd --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin pgw; install -d -m 0750 /etc/pgw; install -d -m 0755 /var/lib/pgw/ports; chown -R pgw:pgw /var/lib/pgw; }
+
+setup_sudoers(){
+  # Allow pgw user to manage pgw-fwd services for auto-start functionality  
+  cat > /etc/sudoers.d/pgw << 'SUDO'
+# Allow pgw user to manage pgw-fwd services without password
+# Both with and without .service extension for compatibility
+pgw ALL=(root) NOPASSWD: /usr/bin/systemctl start pgw-fwd@*.service
+pgw ALL=(root) NOPASSWD: /usr/bin/systemctl stop pgw-fwd@*.service  
+pgw ALL=(root) NOPASSWD: /usr/bin/systemctl restart pgw-fwd@*.service
+pgw ALL=(root) NOPASSWD: /usr/bin/systemctl is-active pgw-fwd@*.service
+pgw ALL=(root) NOPASSWD: /usr/bin/systemctl status pgw-fwd@*.service
+pgw ALL=(root) NOPASSWD: /usr/bin/systemctl start pgw-fwd@*
+pgw ALL=(root) NOPASSWD: /usr/bin/systemctl stop pgw-fwd@*
+pgw ALL=(root) NOPASSWD: /usr/bin/systemctl restart pgw-fwd@*
+pgw ALL=(root) NOPASSWD: /usr/bin/systemctl is-active pgw-fwd@*
+pgw ALL=(root) NOPASSWD: /usr/bin/systemctl status pgw-fwd@*
+pgw ALL=(root) NOPASSWD: /bin/systemctl start pgw-fwd@*.service
+pgw ALL=(root) NOPASSWD: /bin/systemctl stop pgw-fwd@*.service  
+pgw ALL=(root) NOPASSWD: /bin/systemctl restart pgw-fwd@*.service
+pgw ALL=(root) NOPASSWD: /bin/systemctl is-active pgw-fwd@*.service
+pgw ALL=(root) NOPASSWD: /bin/systemctl status pgw-fwd@*.service
+pgw ALL=(root) NOPASSWD: /bin/systemctl start pgw-fwd@*
+pgw ALL=(root) NOPASSWD: /bin/systemctl stop pgw-fwd@*
+pgw ALL=(root) NOPASSWD: /bin/systemctl restart pgw-fwd@*
+pgw ALL=(root) NOPASSWD: /bin/systemctl is-active pgw-fwd@*
+pgw ALL=(root) NOPASSWD: /bin/systemctl status pgw-fwd@*
+SUDO
+  # Validate sudoers file
+  visudo -cf /etc/sudoers.d/pgw
+}
 
 secr(){ head -c 24 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 48; }
 
@@ -151,8 +181,6 @@ start_fwds(){ for p in $(seq $FWD_BASE $FWD_MAX); do systemctl start pgw-fwd@"$p
 
 notes(){ install -d -m 0755 /etc/pgw; date -Is > /etc/pgw/INSTALL_NOTES.txt; echo "See /etc/pgw/pgw.env for credentials" >> /etc/pgw/INSTALL_NOTES.txt; }
 
-main(){ need_root; ensure_packages; ensure_sysctl; install_go; clone_repo; build_install; install_web; ensure_user; write_env; conf_dns; units; start_fwds; notes; echo "OK: install done."; }
+main(){ need_root; ensure_packages; ensure_sysctl; install_go; clone_repo; build_install; install_web; ensure_user; setup_sudoers; write_env; conf_dns; units; start_fwds; notes; echo "OK: install done."; }
 
 main "$@"
-chmod +x deploy/install-pgw.sh
-sed -n 1,200p deploy/install-pgw.sh
