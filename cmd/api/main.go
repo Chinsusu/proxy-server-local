@@ -357,22 +357,16 @@ func main() {
 				return
 			}
 
-			// Health-check upstream before applying (support http and socks5)
-			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-			var res check.Result
-			switch strings.ToLower(strings.TrimSpace(mv.Proxy.Type)) {
-			case "http", "":
-				res = check.CheckHTTP(ctx, mv.Proxy.Host, mv.Proxy.Port, mv.Proxy.Username, mv.Proxy.Password)
-			case "socks5", "socks":
-				res = check.CheckSOCKS5(ctx, mv.Proxy.Host, mv.Proxy.Port, mv.Proxy.Username, mv.Proxy.Password)
-			default:
-				cancel()
+			// Health-check upstream before applying
+			if mv.Proxy.Type != "http" {
 				_ = st.UpdateMappingState(mv.ID, "FAILED", mv.LocalRedirectPort)
 				mv.State = "FAILED"
 				logging.Info.Printf("[DEBUG] Sending JSON response for mapping %s", mv.ID)
 				httpx.JSON(w, 201, mv)
 				return
 			}
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			res := check.CheckHTTP(ctx, mv.Proxy.Host, mv.Proxy.Port, mv.Proxy.Username, mv.Proxy.Password)
 			cancel()
 			if res.Err != nil {
 				st.SetProxyTelemetry(mv.Proxy.ID, types.StatusDown, 0, "")
