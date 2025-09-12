@@ -93,45 +93,6 @@
         </div>
       </div>
     </div>
-    
-      <div class="card-body">
-        <form id="bulk-mapping-form" class="row g-3">
-          <div class="col-md-4">
-            <label class="form-label">Starting IP Address</label>
-            <input type="text" id="bulk-start-ip" class="form-control" value="192.168.2.101" placeholder="192.168.2.101">
-            <div class="form-text">First IP in the range</div>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Number of Mappings</label>
-            <input type="number" id="bulk-count" class="form-control" min="1" max="50" value="5">
-            <div class="form-text">Max: <span id="max-available">0</span> available proxies</div>
-          </div>
-          <div class="col-md-3">
-            <div class="form-check mt-4">
-              <input class="form-check-input" type="checkbox" id="bulk-dry-run">
-              <label class="form-check-label" for="bulk-dry-run">
-                Dry Run (Preview Only)
-              </label>
-            </div>
-          </div>
-          <div class="col-md-2 d-grid">
-            <label class="form-label invisible">&nbsp;</label>
-            <button type="submit" class="btn btn-primary">Create Mappings</button>
-          </div>
-        </form>
-        
-        <!-- Progress and Status -->
-        <div id="bulk-progress" class="mt-3" style="display: none;">
-          <div class="progress mb-2">
-            <div id="bulk-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div>
-          </div>
-          <div id="bulk-status" class="alert alert-info mb-0">
-            <div id="bulk-logs"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-    
     <!-- Delete All Section -->
     <div class="alert alert-warning mt-3 d-flex justify-content-between align-items-center">
       <div>
