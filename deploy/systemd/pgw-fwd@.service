@@ -1,0 +1,25 @@
+[Unit]
+Description=PGW Forwarder instance on port %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pgw
+Group=pgw
+EnvironmentFile=/etc/pgw/pgw.env
+Environment=PGW_FWD_ADDR=:%i
+ExecStart=/usr/local/bin/pgw-fwd
+Restart=always
+RestartSec=2s
+
+# Resource Limits
+LimitNOFILE=32768
+MemoryMax=128M
+TasksMax=1024
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

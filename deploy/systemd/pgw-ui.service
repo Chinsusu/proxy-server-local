@@ -1,0 +1,24 @@
+[Unit]
+Description=PGW UI
+After=network-online.target pgw-api.service
+Wants=network-online.target
+
+[Service]
+User=pgw
+Group=pgw
+EnvironmentFile=/etc/pgw/pgw.env
+ExecStart=/usr/local/bin/pgw-ui
+Restart=always
+RestartSec=2s
+
+# Resource Limits
+LimitNOFILE=16384
+MemoryMax=128M
+TasksMax=1024
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
