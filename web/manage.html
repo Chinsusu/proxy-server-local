@@ -51,52 +51,54 @@
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center">
-    <!-- Bulk Mapping Section -->
-    <div class="card mt-3">
+    <!-- Bulk Create Mappings Card -->
+    <div class="card mt-4">
       <div class="card-header">
-        <h6 class="mb-0">🚀 Bulk Create Mappings</h6>
+        <h5 class="mb-0">Bulk Create Mappings</h5>
       </div>
       <div class="card-body">
-        <div class="row g-3">
-          <div class="col-md-3">
-            <label class="form-label">Starting IP Address</label>
-            <input type="text" id="bulk-start-ip" class="form-control" value="192.168.2.101">
-            <small class="text-muted">First IP in range</small>
-          </div>
-          <div class="col-md-2">
-            <label class="form-label">Count</label>
-            <input type="number" id="bulk-count" class="form-control" min="1" max="50" value="5">
-            <small class="text-muted">Max: <span id="max-available">0</span></small>
-          </div>
-          <div class="col-md-3">
-            <div class="form-check mt-4">
-              <input class="form-check-input" type="checkbox" id="bulk-dry-run">
-              <label class="form-check-label" for="bulk-dry-run">Dry Run (Preview)</label>
+        <form id="bulk-create-form">
+          <div class="row mb-3">
+            <div class="col-md-3">
+              <label for="start-ip" class="form-label">Start IP</label>
+              <input type="text" class="form-control" id="start-ip" value="192.168.2.101" required>
+            </div>
+            <div class="col-md-3">
+              <label for="mapping-count-input" class="form-label">Number of Mappings</label>
+              <input type="number" class="form-control" id="mapping-count-input" min="1" max="100" value="10" required>
+            </div>
+            <div class="col-md-3">
+              <div class="form-check mt-4">
+                <input class="form-check-input" type="checkbox" id="dry-run">
+                <label class="form-check-label" for="dry-run">Dry Run</label>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="mt-4">
+                <button type="submit" class="btn btn-success">Create Bulk Mappings</button>
+              </div>
             </div>
           </div>
-          <div class="col-md-4">
-            <label class="form-label invisible">Action</label>
-            <div class="d-grid">
-              <button id="btn-bulk-create" class="btn btn-primary">Create Mappings</button>
-            </div>
-          </div>
-        </div>
+        </form>
         
-        <!-- Progress -->
+        <!-- Progress Bar -->
         <div id="bulk-progress" class="mt-3" style="display: none;">
           <div class="progress mb-2">
-            <div id="bulk-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div>
+            <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%"></div>
           </div>
-          <div id="bulk-logs" class="border rounded p-2 bg-light" style="height: 150px; overflow-y: auto; font-size: 0.875rem;"></div>
+          <div id="progress-text" class="small text-muted">Starting...</div>
+        </div>
+        
+        <!-- Bulk Create Log -->
+        <div id="bulk-log" class="mt-3" style="display: none;">
+          <h6>Log:</h6>
+          <div id="log-container" class="bg-light p-3 rounded" style="max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.875rem;"></div>
         </div>
       </div>
     </div>
-    <!-- Delete All Section -->
-    <div class="mt-3 d-flex justify-content-end">
-      <button id="btn-delete-all-mappings" class="btn btn-outline-danger">Delete All Mappings</button>
-    </div>
+
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
         <h5 class="mb-0">Active Client Mappings</h5>
         <span class="text-muted" id="mapping-count">— mappings</span>
       </div>
@@ -120,232 +122,155 @@
         </table>
       </div>
     </div>
+
+    <!-- Delete All Mappings Card -->
+    <div class="card mt-4">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center">
+          <div>
+            <h6 class="mb-1">Bulk Delete Operations</h6>
+            <small class="text-muted">Delete all active client mappings</small>
+          </div>
+          <button id="btn-delete-all-mappings" class="btn btn-outline-danger">Delete All Mappings</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script>
-    document.addEventListener("DOMContentLoaded", function() {
-      // Initialize bulk mapping
-      updateAvailableProxies();
-      
-      // Bulk mapping form handler
-      const bulkBtn = document.getElementById("btn-bulk-create");
-      if (bulkBtn) {
-        bulkBtn.addEventListener("click", function(e) {
-          e.preventDefault();
-          const isDryRun = document.getElementById("bulk-dry-run").checked;
-          performBulkCreate(isDryRun);
-        });
-      }
-      
-      // Update available proxies when count changes
-      const bulkCountInput = document.getElementById("bulk-count");
-      if (bulkCountInput) {
-        bulkCountInput.addEventListener("input", function() {
-          if (parseInt(this.value) > availableProxies) {
-            this.value = availableProxies;
-          }
-        });
-      }
-      const deleteAllBtn = document.getElementById("btn-delete-all-mappings");
-      if (deleteAllBtn) {
-        deleteAllBtn.addEventListener("click", async function() {
-          if (!confirm("Delete ALL mappings? This cannot be undone!")) return;
-          
-          try {
-            // Get all mappings
-            const response = await fetch("/api/v1/mappings");
-            const mappings = await response.json();
-            
-            if (mappings.length === 0) {
-              alert("No mappings to delete");
-              return;
-            }
-            
-            // Delete each mapping
-            let deleted = 0;
-            for (const mapping of mappings) {
-              try {
-                await fetch(`/api/v1/mappings/${mapping.id}`, { method: "DELETE" });
-                deleted++;
-              } catch (err) {
-                console.error("Failed to delete mapping:", mapping.id, err);
-              }
-            }
-            
-            alert(`Deleted ${deleted} out of ${mappings.length} mappings`);
-            window.location.reload();
-          } catch (error) {
-            alert("Error: " + error.message);
-          }
-        });
-      }
-    });
-  </script>
-  <script>
-    // Bulk mapping functionality
-    let availableProxies = 0;
+  <script src="/static/app.js?v=1756567005"></script>
+
+</body>
+<script>
+// Bulk Create Mappings
+document.getElementById("bulk-create-form").addEventListener("submit", async function(e) {
+  e.preventDefault();
+  const startIp = document.getElementById("start-ip").value;
+  const count = parseInt(document.getElementById("mapping-count-input").value);
+  const isDryRun = document.getElementById("dry-run").checked;
+  
+  await performBulkCreate(startIp, count, isDryRun);
+});
+
+async function performBulkCreate(startIp, count, isDryRun) {
+  const progressContainer = document.getElementById("bulk-progress");
+  const progressBar = document.getElementById("progress-bar");
+  const progressText = document.getElementById("progress-text");
+  const logContainer = document.getElementById("bulk-log");
+  const logDiv = document.getElementById("log-container");
+  
+  progressContainer.style.display = "block";
+  logContainer.style.display = "block";
+  logDiv.innerHTML = "";
+  
+  function addLogEntry(message, type = "info") {
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = document.createElement("div");
+    logEntry.className = type === "error" ? "text-danger" : (type === "success" ? "text-success" : "text-dark");
+    logEntry.textContent = `[${timestamp}] ${message}`;
+    logDiv.appendChild(logEntry);
+    logDiv.scrollTop = logDiv.scrollHeight;
+  }
+  
+  function updateProgress(current, total) {
+    const percentage = Math.round((current / total) * 100);
+    progressBar.style.width = percentage + "%";
+    progressBar.textContent = percentage + "%";
+    progressText.textContent = `Processing ${current} of ${total} mappings...`;
     
-    // Update available proxy count
-    async function updateAvailableProxies() {
+    if (current === total) {
+      progressBar.classList.add("bg-success");
+      progressText.textContent = "Completed!";
+    }
+  }
+  
+  addLogEntry(`Starting bulk create: ${count} mappings from ${startIp}${isDryRun ? " (DRY RUN)" : ""}`);
+  
+  try {
+    const baseIpParts = startIp.split(".");
+    let currentIp = parseInt(baseIpParts[3]);
+    let processed = 0;
+    
+    for (let i = 0; i < count; i++) {
+      const clientIp = `${baseIpParts[0]}.${baseIpParts[1]}.${baseIpParts[2]}.${currentIp + i}`;
+      
+      if (isDryRun) {
+        addLogEntry(`[DRY RUN] Would create mapping for ${clientIp}`);
+        processed++;
+        updateProgress(processed, count);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        continue;
+      }
+      
       try {
-        const [proxiesResp, mappingsResp] = await Promise.all([
-          fetch("/api/v1/proxies"),
-          fetch("/api/v1/mappings")
-        ]);
-        const proxies = await proxiesResp.json();
-        const mappings = await mappingsResp.json();
+        const response = await fetch("/api/mappings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ client: clientIp })
+        });
         
-        const enabledProxies = proxies.filter(p => p.enabled);
-        const usedProxyIds = new Set(mappings.map(m => m.proxy_id));
-        availableProxies = enabledProxies.filter(p => !usedProxyIds.has(p.id)).length;
-        
-        const maxSpan = document.getElementById("max-available");
-        const bulkCountInput = document.getElementById("bulk-count");
-        if (maxSpan) maxSpan.textContent = availableProxies;
-        if (bulkCountInput) {
-          bulkCountInput.max = availableProxies;
-          if (parseInt(bulkCountInput.value) > availableProxies) {
-            bulkCountInput.value = availableProxies;
-          }
+        if (response.ok) {
+          const data = await response.json();
+          addLogEntry(`✓ Created mapping for ${clientIp} -> ${data.proxy}:${data.port}`, "success");
+        } else {
+          const error = await response.text();
+          addLogEntry(`✗ Failed to create mapping for ${clientIp}: ${error}`, "error");
         }
       } catch (err) {
-        console.error("Failed to update available proxies:", err);
+        addLogEntry(`✗ Error creating mapping for ${clientIp}: ${err.message}`, "error");
       }
+      
+      processed++;
+      updateProgress(processed, count);
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
     
-    // Add IP by number
-    function addToIP(ip, increment) {
-      const parts = ip.split(".").map(Number);
-      if (parts.length !== 4 || parts.some(isNaN)) return ip;
-      let ipInt = (parts[0] << 24) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
-      ipInt += increment;
-      return [
-        (ipInt >>> 24) & 255,
-        (ipInt >>> 16) & 255,
-        (ipInt >>> 8) & 255,
-        ipInt & 255
-      ].join(".");
-    }
+    addLogEntry(`Bulk create completed. Processed ${processed} mappings.`, "success");
     
-    // Log message to bulk logs
-    function addBulkLog(message, type = "info") {
-      const logsDiv = document.getElementById("bulk-logs");
-      if (logsDiv) {
-        const logEntry = document.createElement("div");
-        logEntry.className = `text-${type === "error" ? "danger" : type === "success" ? "success" : "info"}`;
-        logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-        logsDiv.appendChild(logEntry);
-        logsDiv.scrollTop = logsDiv.scrollHeight;
-      }
+    if (!isDryRun) {
+      setTimeout(() => {
+        location.reload();
+      }, 2000);
     }
+  } catch (error) {
+    addLogEntry(`Bulk create failed: ${error.message}`, "error");
+  }
+}
+
+// Delete All Mappings
+document.getElementById("btn-delete-all-mappings").addEventListener("click", async function() {
+  if (!confirm("Are you sure you want to delete ALL client mappings? This cannot be undone.")) {
+    return;
+  }
+  
+  this.disabled = true;
+  this.textContent = "Deleting...";
+  
+  try {
+    const response = await fetch("/api/mappings");
+    if (!response.ok) throw new Error("Failed to fetch mappings");
     
-    // Update progress bar
-    function updateBulkProgress(current, total) {
-      const progressBar = document.getElementById("bulk-progress-bar");
-      if (progressBar) {
-        const percent = total > 0 ? Math.round((current / total) * 100) : 0;
-        progressBar.style.width = percent + "%";
-        progressBar.textContent = `${current}/${total}`;
-      }
-    }
+    const mappings = await response.json();
+    let deleted = 0;
     
-    // Bulk create mappings
-    async function performBulkCreate(isDryRun = false) {
-      const startIP = document.getElementById("bulk-start-ip").value.trim();
-      const count = parseInt(document.getElementById("bulk-count").value) || 0;
-      
-      if (!startIP || count <= 0) {
-        alert("Please enter valid starting IP and count");
-        return;
-      }
-      
-      if (count > availableProxies) {
-        alert(`Cannot create ${count} mappings. Only ${availableProxies} proxies available.`);
-        return;
-      }
-      
-      // Show progress
-      const progressDiv = document.getElementById("bulk-progress");
-      const logsDiv = document.getElementById("bulk-logs");
-      if (progressDiv) progressDiv.style.display = "block";
-      if (logsDiv) logsDiv.innerHTML = "";
-      
-      updateBulkProgress(0, count);
-      addBulkLog(`Starting ${isDryRun ? "dry run" : "bulk create"}: ${count} mappings from ${startIP}`);
-      
-      let created = 0, failed = 0;
-      
+    for (const mapping of mappings) {
       try {
-        for (let i = 0; i < count; i++) {
-          const currentIP = addToIP(startIP, i);
-          
-          if (isDryRun) {
-            addBulkLog(`[DRY RUN] Would create mapping for ${currentIP}`, "info");
-            created++;
-          } else {
-            try {
-              // Create client
-              const clientResp = await fetch("/api/v1/clients", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ip_cidr: `${currentIP}/32`, enabled: true })
-              });
-              const client = await clientResp.json();
-              
-              // Get available proxy
-              const [proxiesResp, mappingsResp] = await Promise.all([
-                fetch("/api/v1/proxies"),
-                fetch("/api/v1/mappings")
-              ]);
-              const proxies = await proxiesResp.json();
-              const existingMappings = await mappingsResp.json();
-              const usedProxyIds = new Set(existingMappings.map(m => m.proxy_id));
-              const availableProxy = proxies.find(p => p.enabled && !usedProxyIds.has(p.id));
-              
-              if (!availableProxy) {
-                throw new Error("No available proxy found");
-              }
-              
-              // Create mapping
-              await fetch("/api/v1/mappings", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  client_id: client.id,
-                  proxy_id: availableProxy.id
-                })
-              });
-              
-              addBulkLog(`✓ Created mapping: ${currentIP} -> ${availableProxy.host}:${availableProxy.port}`, "success");
-              created++;
-            } catch (err) {
-              addBulkLog(`✗ Failed to create mapping for ${currentIP}: ${err.message}`, "error");
-              failed++;
-            }
-          }
-          
-          updateBulkProgress(i + 1, count);
+        const delResponse = await fetch(`/api/mappings/${mapping.id}`, { method: "DELETE" });
+        if (delResponse.ok) {
+          deleted++;
         }
-        
-        addBulkLog(`Completed! ${created} ${isDryRun ? "simulated" : "created"}${failed > 0 ? `, ${failed} failed` : ""}`);
-        
-        if (!isDryRun && created > 0) {
-          // Trigger reconcile
-          try {
-            await fetch("/agent/reconcile");
-            addBulkLog("Agent reconcile completed", "success");
-          } catch (err) {
-            addBulkLog("Warning: Agent reconcile may have failed", "error");
-          }
-          
-          // Refresh page
-          setTimeout(() => window.location.reload(), 2000);
-        }
-      } catch (error) {
-        addBulkLog(`Fatal error: ${error.message}`, "error");
+      } catch (err) {
+        console.error("Error deleting mapping", mapping.id, err);
       }
     }
-  <script src="/static/app.js?v=1756567005"></script>
-</body>
+    
+    alert(`Deleted ${deleted} of ${mappings.length} mappings`);
+    location.reload();
+  } catch (error) {
+    alert("Error deleting mappings: " + error.message);
+    this.disabled = false;
+    this.textContent = "Delete All Mappings";
+  }
+});
+</script>
 </html>
