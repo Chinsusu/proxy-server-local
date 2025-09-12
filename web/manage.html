@@ -53,6 +53,12 @@
 
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
+    <!-- Delete All Section -->
+    <div class="alert alert-warning mt-3">
+      <strong>⚠️ Danger Zone:</strong>
+      <button id="btn-delete-all-mappings" class="btn btn-outline-danger btn-sm ms-2">Delete All Mappings</button>
+      <small class="text-muted ms-2">This will permanently delete ALL client-proxy mappings</small>
+    </div>
         <h5 class="mb-0">Active Client Mappings</h5>
         <span class="text-muted" id="mapping-count">— mappings</span>
       </div>
@@ -79,6 +85,43 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      const deleteAllBtn = document.getElementById("btn-delete-all-mappings");
+      if (deleteAllBtn) {
+        deleteAllBtn.addEventListener("click", async function() {
+          if (!confirm("Delete ALL mappings? This cannot be undone!")) return;
+          
+          try {
+            // Get all mappings
+            const response = await fetch("/api/v1/mappings");
+            const mappings = await response.json();
+            
+            if (mappings.length === 0) {
+              alert("No mappings to delete");
+              return;
+            }
+            
+            // Delete each mapping
+            let deleted = 0;
+            for (const mapping of mappings) {
+              try {
+                await fetch(`/api/v1/mappings/${mapping.id}`, { method: "DELETE" });
+                deleted++;
+              } catch (err) {
+                console.error("Failed to delete mapping:", mapping.id, err);
+              }
+            }
+            
+            alert(`Deleted ${deleted} out of ${mappings.length} mappings`);
+            window.location.reload();
+          } catch (error) {
+            alert("Error: " + error.message);
+          }
+        });
+      }
+    });
+  </script>
   <script src="/static/app.js?v=1756567005"></script>
 </body>
 </html>
