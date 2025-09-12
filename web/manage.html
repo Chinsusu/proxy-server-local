@@ -59,6 +59,42 @@
         <h6 class="mb-0">🚀 Bulk Create Mappings</h6>
       </div>
       <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-3">
+            <label class="form-label">Starting IP Address</label>
+            <input type="text" id="bulk-start-ip" class="form-control" value="192.168.2.101">
+            <small class="text-muted">First IP in range</small>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Count</label>
+            <input type="number" id="bulk-count" class="form-control" min="1" max="50" value="5">
+            <small class="text-muted">Max: <span id="max-available">0</span></small>
+          </div>
+          <div class="col-md-3">
+            <div class="form-check mt-4">
+              <input class="form-check-input" type="checkbox" id="bulk-dry-run">
+              <label class="form-check-label" for="bulk-dry-run">Dry Run (Preview)</label>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label invisible">Action</label>
+            <div class="d-grid">
+              <button id="btn-bulk-create" class="btn btn-primary">Create Mappings</button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Progress -->
+        <div id="bulk-progress" class="mt-3" style="display: none;">
+          <div class="progress mb-2">
+            <div id="bulk-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div>
+          </div>
+          <div id="bulk-logs" class="border rounded p-2 bg-light" style="height: 150px; overflow-y: auto; font-size: 0.875rem;"></div>
+        </div>
+      </div>
+    </div>
+    
+      <div class="card-body">
         <form id="bulk-mapping-form" class="row g-3">
           <div class="col-md-4">
             <label class="form-label">Starting IP Address</label>
@@ -97,10 +133,12 @@
     </div>
     
     <!-- Delete All Section -->
-    <div class="alert alert-warning mt-3">
-      <strong>⚠️ Danger Zone:</strong>
-      <button id="btn-delete-all-mappings" class="btn btn-outline-danger btn-sm ms-2">Delete All Mappings</button>
-      <small class="text-muted ms-2">This will permanently delete ALL client-proxy mappings</small>
+    <div class="alert alert-warning mt-3 d-flex justify-content-between align-items-center">
+      <div>
+        <strong>⚠️ Danger Zone:</strong>
+        <span class="ms-2">Permanently delete ALL client-proxy mappings</span>
+      </div>
+      <button id="btn-delete-all-mappings" class="btn btn-outline-danger btn-sm">Delete All Mappings</button>
     </div>
         <h5 class="mb-0">Active Client Mappings</h5>
         <span class="text-muted" id="mapping-count">— mappings</span>
@@ -134,9 +172,9 @@
       updateAvailableProxies();
       
       // Bulk mapping form handler
-      const bulkForm = document.getElementById("bulk-mapping-form");
-      if (bulkForm) {
-        bulkForm.addEventListener("submit", function(e) {
+      const bulkBtn = document.getElementById("btn-bulk-create");
+      if (bulkBtn) {
+        bulkBtn.addEventListener("click", function(e) {
           e.preventDefault();
           const isDryRun = document.getElementById("bulk-dry-run").checked;
           performBulkCreate(isDryRun);
