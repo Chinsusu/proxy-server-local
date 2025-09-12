@@ -142,7 +142,7 @@
 
 </body>
 <script>
-// Bulk Create Mappings
+// Bulk Create Form Submit Handler
 document.getElementById("bulk-create-form").addEventListener("submit", async function(e) {
   e.preventDefault();
   const startIp = document.getElementById("start-ip").value;
@@ -152,6 +152,7 @@ document.getElementById("bulk-create-form").addEventListener("submit", async fun
   await performBulkCreate(startIp, count, isDryRun);
 });
 
+// Bulk Create Function - SINGLE DEFINITION
 async function performBulkCreate(startIp, count, isDryRun) {
   const progressContainer = document.getElementById("bulk-progress");
   const progressBar = document.getElementById("progress-bar");
@@ -187,57 +188,119 @@ async function performBulkCreate(startIp, count, isDryRun) {
   addLogEntry(`Starting bulk create: ${count} mappings from ${startIp}${isDryRun ? " (DRY RUN)" : ""}`);
   
   try {
+    // Fetch all required data
+    addLogEntry("Fetching proxies, clients, and mappings...");
+    const [proxiesResponse, clientsResponse, mappingsResponse] = await Promise.all([
+      fetch("/api/v1/proxies"),
+      fetch("/api/v1/clients"), 
+      fetch("/api/v1/mappings")
+    ]);
+    
+    if (!proxiesResponse.ok || !clientsResponse.ok || !mappingsResponse.ok) {
+      throw new Error("Failed to fetch data from API");
+    }
+    
+    const proxies = await proxiesResponse.json();
+    const clients = await clientsResponse.json();
+    const mappings = await mappingsResponse.json();
+    
+    // Find unmapped proxies
+    const mappedProxyIds = new Set(mappings.map(m => m.proxy.id));
+    const availableProxies = proxies.filter(p => 
+      p.status === "OK" && 
+      p.enabled && 
+      !mappedProxyIds.has(p.id)
+    );
+    
+    addLogEntry(`Total proxies: ${proxies.length}, OK status: ${proxies.filter(p => p.status === "OK" && p.enabled).length}, Available (unmapped): ${availableProxies.length}`);
+    
+    if (availableProxies.length === 0) {
+      addLogEntry("No unmapped proxies available. All OK proxies are already in use.", "error");
+      return;
+    }
+    
+    const actualCount = Math.min(count, availableProxies.length);
+    if (actualCount < count) {
+      addLogEntry(`Adjusting to ${actualCount} mappings (limited by available proxies)`, "info");
+    }
+    
+    // Process mappings
     const baseIpParts = startIp.split(".");
     let currentIp = parseInt(baseIpParts[3]);
     let processed = 0;
+    let successCount = 0;
     
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < actualCount; i++) {
       const clientIp = `${baseIpParts[0]}.${baseIpParts[1]}.${baseIpParts[2]}.${currentIp + i}`;
+      const clientCidr = clientIp + "/32";
+      const proxy = availableProxies[i];
       
       if (isDryRun) {
-        addLogEntry(`[DRY RUN] Would create mapping for ${clientIp}`);
+        addLogEntry(`[DRY RUN] Would create mapping for ${clientIp} -> ${proxy.host}:${proxy.port}`);
         processed++;
-        updateProgress(processed, count);
+        updateProgress(processed, actualCount);
         await new Promise(resolve => setTimeout(resolve, 100));
         continue;
       }
       
       try {
-        const response = await fetch("/api/mappings", {
+        // Find or create client
+        let client = clients.find(c => c.ip_cidr === clientCidr);
+        
+        if (!client) {
+          const clientResponse = await fetch("/api/v1/clients", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ip_cidr: clientCidr, enabled: true })
+          });
+          
+          if (clientResponse.ok) {
+            client = await clientResponse.json();
+            addLogEntry(`Created client for ${clientIp}`, "info");
+          } else {
+            const error = await clientResponse.text();
+            addLogEntry(`✗ Failed to create client for ${clientIp}: ${error}`, "error");
+            processed++;
+            updateProgress(processed, actualCount);
+            continue;
+          }
+        }
+        
+        // Create mapping
+        const mappingResponse = await fetch("/api/v1/mappings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ client: clientIp })
+          body: JSON.stringify({ client_id: client.id, proxy_id: proxy.id })
         });
         
-        if (response.ok) {
-          const data = await response.json();
-          addLogEntry(`✓ Created mapping for ${clientIp} -> ${data.proxy}:${data.port}`, "success");
+        if (mappingResponse.ok) {
+          addLogEntry(`✓ Created mapping for ${clientIp} -> ${proxy.host}:${proxy.port}`, "success");
+          successCount++;
         } else {
-          const error = await response.text();
+          const error = await mappingResponse.text();
           addLogEntry(`✗ Failed to create mapping for ${clientIp}: ${error}`, "error");
         }
+        
       } catch (err) {
-        addLogEntry(`✗ Error creating mapping for ${clientIp}: ${err.message}`, "error");
+        addLogEntry(`✗ Error processing ${clientIp}: ${err.message}`, "error");
       }
       
       processed++;
-      updateProgress(processed, count);
+      updateProgress(processed, actualCount);
       await new Promise(resolve => setTimeout(resolve, 200));
     }
     
-    addLogEntry(`Bulk create completed. Processed ${processed} mappings.`, "success");
+    addLogEntry(`Completed: ${successCount}/${processed} mappings created successfully.`, "success");
     
-    if (!isDryRun) {
-      setTimeout(() => {
-        location.reload();
-      }, 2000);
+    if (!isDryRun && successCount > 0) {
+      setTimeout(() => location.reload(), 2000);
     }
   } catch (error) {
     addLogEntry(`Bulk create failed: ${error.message}`, "error");
   }
 }
 
-// Delete All Mappings
+// Delete All Mappings Handler
 document.getElementById("btn-delete-all-mappings").addEventListener("click", async function() {
   if (!confirm("Are you sure you want to delete ALL client mappings? This cannot be undone.")) {
     return;
@@ -247,7 +310,7 @@ document.getElementById("btn-delete-all-mappings").addEventListener("click", asy
   this.textContent = "Deleting...";
   
   try {
-    const response = await fetch("/api/mappings");
+    const response = await fetch("/api/v1/mappings");
     if (!response.ok) throw new Error("Failed to fetch mappings");
     
     const mappings = await response.json();
@@ -255,10 +318,8 @@ document.getElementById("btn-delete-all-mappings").addEventListener("click", asy
     
     for (const mapping of mappings) {
       try {
-        const delResponse = await fetch(`/api/mappings/${mapping.id}`, { method: "DELETE" });
-        if (delResponse.ok) {
-          deleted++;
-        }
+        const delResponse = await fetch(`/api/v1/mappings/${mapping.id}`, { method: "DELETE" });
+        if (delResponse.ok) deleted++;
       } catch (err) {
         console.error("Error deleting mapping", mapping.id, err);
       }
