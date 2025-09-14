@@ -102,7 +102,7 @@ main() {
     grep "PGW_FWD_ADDR=" "$SERVICE_FILE"
     
     log "Current forwarder bindings:"
-    netstat -tlnp | grep pgw-fwd | head -5 || warn "No forwarder processes found in netstat"
+    ss -tlnp | grep pgw-fwd | head -5 || warn "No forwarder processes found in netstat"
     
     success "Rollback successful!"
     log "Original backup preserved: $BACKUP_FILE"

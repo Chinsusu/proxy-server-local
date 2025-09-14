@@ -139,7 +139,7 @@ main() {
     
     # Show binding status
     log "Current forwarder bindings:"
-    ss -tlnp | grep "$LAN_IP:" | grep pgw-fwd || {
+    netstat -tlnp | grep "$LAN_IP:" | grep pgw-fwd || {
         warn "No forwarders found binding to $LAN_IP"
     }
     

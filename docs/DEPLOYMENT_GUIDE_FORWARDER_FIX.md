@@ -78,7 +78,7 @@ done
 systemctl list-units --state=active | grep pgw-fwd@
 
 # Verify binding to LAN IP (replace with your LAN IP)
-netstat -tlnp | grep "192.168.2.1:"
+ss -tlnp | grep "192.168.2.1:"
 
 # Check logs for successful connections
 journalctl -u pgw-fwd@15001.service --since "5 minutes ago" | grep OK
@@ -96,13 +96,13 @@ journalctl -u pgw-fwd@15001.service --since "5 minutes ago" | grep OK
 
 **Before Fix:**
 ```bash
-netstat -tlnp | grep 1500
+ss -tlnp | grep 1500
 tcp6  0  0  :::15001  :::*  LISTEN  pgw-fwd
 ```
 
 **After Fix:**
 ```bash
-netstat -tlnp | grep 1500
+ss -tlnp | grep 1500
 tcp   0  0  192.168.2.1:15001  0.0.0.0:*  LISTEN  pgw-fwd
 ```
 
