@@ -8,3 +8,5 @@ bin/
 .DS_Store
 dist/
 /ui
+update-logs/
+nodes.txt

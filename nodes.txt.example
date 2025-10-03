@@ -1,0 +1,16 @@
+# Example nodes.txt file for update-all-nodes.sh
+# Format: [user@]hostname_or_ip
+# Lines starting with # are ignored
+
+# Production nodes
+192.168.1.10
+192.168.1.11
+root@192.168.1.12
+
+# Staging nodes
+# admin@staging1.example.com
+# admin@staging2.example.com
+
+# Development nodes
+# 10.0.0.100
+# 10.0.0.101
