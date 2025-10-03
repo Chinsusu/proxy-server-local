@@ -57,9 +57,29 @@ for service in "${SERVICES[@]}"; do
     fi
 done
 
+# Also stop any pgw-fwd@* instances (port-specific forwarders)
+echo "  Checking for pgw-fwd instances..."
+FWD_INSTANCES=$(systemctl list-units --type=service --state=running 'pgw-fwd@*' --no-legend | awk '{print $1}')
+if [ -n "$FWD_INSTANCES" ]; then
+    for fwd in $FWD_INSTANCES; do
+        echo "  Stopping $fwd..."
+        systemctl stop "$fwd" || true
+    done
+fi
+
 echo ""
 echo -e "${GREEN}==> Installing new binaries...${NC}"
-cp -v bin/pgw-* /usr/local/bin/
+# Use install command which handles overwrites better
+for binary in bin/pgw-*; do
+    basename=$(basename "$binary")
+    echo "  Installing $basename..."
+    install -m 755 "$binary" /usr/local/bin/ || {
+        # Fallback: try to force copy
+        rm -f "/usr/local/bin/$basename"
+        cp "$binary" /usr/local/bin/
+        chmod 755 "/usr/local/bin/$basename"
+    }
+done
 
 echo ""
 echo -e "${GREEN}==> Starting services...${NC}"
@@ -71,6 +91,15 @@ for service in "${SERVICES[@]}"; do
         echo "  $service is not enabled, skipping..."
     fi
 done
+
+# Restart any pgw-fwd instances that were running
+if [ -n "$FWD_INSTANCES" ]; then
+    echo "  Restarting pgw-fwd instances..."
+    for fwd in $FWD_INSTANCES; do
+        echo "  Starting $fwd..."
+        systemctl start "$fwd" || true
+    done
+fi
 
 echo ""
 echo -e "${GREEN}==> Checking service status...${NC}"
@@ -85,7 +114,7 @@ done
 
 echo ""
 echo -e "${GREEN}==> Binary info:${NC}"
-ls -lh /usr/local/bin/pgw-* | awk '{print "  " $9 " (" $5 ", " $6 " " $7 " " $8 ")"}'
+ls -lh /usr/local/bin/pgw-* 2>/dev/null | awk '{print "  " $9 " (" $5 ", " $6 " " $7 " " $8 ")"}'
 
 echo ""
 echo -e "${GREEN}==> Current git commit:${NC}"
