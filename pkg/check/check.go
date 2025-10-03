@@ -1,8 +1,10 @@
 package check
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net"
@@ -22,63 +24,74 @@ type Result struct {
 	Err       error             `json:"-"`
 }
 
-// Nhiều endpoint để tăng khả năng thành công
-var endpoints = []string{
+// tcpProbeTarget is the destination we attempt to establish a TCP tunnel to via the proxy.
+const tcpProbeTarget = "google.com:443"
+
+// IP check endpoints (lightweight)
+var ipCheckEndpoints = []string{
 	"https://api.ipify.org?format=text",
 	"https://ifconfig.me/ip",
 	"https://icanhazip.com/",
 }
 
 func CheckHTTP(ctx context.Context, host string, port int, user, pass *string) Result {
-	// proxy URL: http://user:pass@host:port
-	u := &url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(port))}
+	// Measure latency to establish an HTTP CONNECT tunnel to tcpProbeTarget via the HTTP proxy.
+	proxyAddr := net.JoinHostPort(host, strconv.Itoa(port))
+	d := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
+
+	start := time.Now()
+	conn, err := d.DialContext(ctx, "tcp", proxyAddr)
+	if err != nil {
+		return Result{Status: types.StatusDown, Err: err}
+	}
+	// Ensure the connection won't hang forever
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	// Build CONNECT request
+	req := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{Opaque: tcpProbeTarget},
+		Host:   tcpProbeTarget,
+		Header: make(http.Header),
+	}
+	req.Header.Set("User-Agent", "pgw-tcp-health/1.0")
 	if user != nil && pass != nil {
-		u.User = url.UserPassword(*user, *pass)
+		token := base64.StdEncoding.EncodeToString([]byte(*user + ":" + *pass))
+		req.Header.Set("Proxy-Authorization", "Basic "+token)
 	}
 
-	tr := &http.Transport{
-		Proxy: http.ProxyURL(u),
-		DialContext: (&net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		TLSHandshakeTimeout:   7 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		IdleConnTimeout:       15 * time.Second,
-		MaxIdleConns:          32,
-		MaxConnsPerHost:       32,
-		ForceAttemptHTTP2:     true,
-		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+	if err := req.Write(conn); err != nil {
+		_ = conn.Close()
+		return Result{Status: types.StatusDown, Err: err}
 	}
-	client := &http.Client{Transport: tr}
 
-	var lastErr error
-	for _, ep := range endpoints {
-		start := time.Now()
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ep, nil)
-		req.Header.Set("User-Agent", "pgw-health/1.0")
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		b, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != 200 {
-			lastErr = errors.New("non-200: " + resp.Status)
-			continue
-		}
-		ip := strings.TrimSpace(string(b))
-		elapsed := time.Since(start)
-		return Result{
-			Status:    classifyLatency(elapsed),
-			LatencyMs: int(elapsed.Milliseconds()),
-			ExitIP:    ip,
-			Err:       nil,
-		}
+	// Read proxy response to CONNECT
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		_ = conn.Close()
+		return Result{Status: types.StatusDown, Err: err}
 	}
-	return Result{Status: types.StatusDown, Err: lastErr}
+	// We don't need the body
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		_ = conn.Close()
+		return Result{Status: types.StatusDown, Err: errors.New("non-200 CONNECT: " + resp.Status)}
+	}
+
+	elapsed := time.Since(start)
+	_ = conn.Close()
+	
+	// Fetch exit IP via separate connection through the proxy
+	exitIP := fetchExitIPViaHTTPProxy(ctx, host, port, user, pass)
+
+	return Result{
+		Status:    classifyLatency(elapsed),
+		LatencyMs: int(elapsed.Milliseconds()),
+		ExitIP:    exitIP,
+		Err:       nil,
+	}
 }
 
 func classifyLatency(d time.Duration) types.ProxyStatus {
@@ -92,85 +105,137 @@ func classifyLatency(d time.Duration) types.ProxyStatus {
 	}
 }
 
-// CheckSOCKS5 kiểm tra proxy SOCKS5 bằng cách establish connection và test qua HTTP endpoint
+// CheckSOCKS5 kiểm tra proxy SOCKS5 bằng cách đo thời gian thiết lập kết nối TCP tới tcpProbeTarget qua proxy
 func CheckSOCKS5(ctx context.Context, host string, port int, user, pass *string) Result {
 	// Create SOCKS5 proxy dialer
 	proxyAddr := net.JoinHostPort(host, strconv.Itoa(port))
-	
-	// Tạo custom dialer thông qua SOCKS5 proxy
+
 	dialer := &socksDialer{
 		proxyAddr: proxyAddr,
 		username:  user,
 		password:  pass,
 	}
+
+	start := time.Now()
+	conn, err := dialer.dialWithContext(ctx, "tcp", tcpProbeTarget)
+	if err != nil {
+		return Result{Status: types.StatusDown, Err: err}
+	}
+
+	elapsed := time.Since(start)
+	_ = conn.Close()
 	
-	// Test connectivity bằng cách connect tới test endpoint
-	var lastErr error
-	for _, ep := range endpoints {
-		start := time.Now()
-		
-		// Parse URL để lấy host:port cho SOCKS5
-		testURL, err := url.Parse(ep)
+	// Fetch exit IP via separate connection through the SOCKS5 proxy
+	exitIP := fetchExitIPViaSOCKS5(ctx, host, port, user, pass)
+
+	return Result{
+		Status:    classifyLatency(elapsed),
+		LatencyMs: int(elapsed.Milliseconds()),
+		ExitIP:    exitIP,
+		Err:       nil,
+	}
+}
+
+// fetchExitIPViaHTTPProxy makes a separate HTTP request through the proxy to get the exit IP
+func fetchExitIPViaHTTPProxy(ctx context.Context, host string, port int, user, pass *string) string {
+	// Build proxy URL
+	proxyURL := &url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+	}
+	if user != nil && pass != nil {
+		proxyURL.User = url.UserPassword(*user, *pass)
+	}
+
+	transport := &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout: 5 * time.Second,
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   8 * time.Second,
+	}
+
+	for _, endpoint := range ipCheckEndpoints {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
-			lastErr = err
 			continue
 		}
-		
-		testHost := testURL.Host
-		if !strings.Contains(testHost, ":") {
-			// Add default port cho HTTPS
-			testHost = testHost + ":443"
-		}
-		
-		// Test SOCKS5 connection
-		conn, err := dialer.dialWithContext(ctx, "tcp", testHost)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		
-		// Perform HTTP request qua SOCKS5 connection  
-		client := &http.Client{
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.dialWithContext(ctx, network, addr)
-				},
-				TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-			},
-			Timeout: 10 * time.Second,
-		}
-		
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ep, nil)
-		req.Header.Set("User-Agent", "pgw-socks5-health/1.0")
-		
+		req.Header.Set("User-Agent", "pgw-ip-check/1.0")
+
 		resp, err := client.Do(req)
 		if err != nil {
-			conn.Close()
-			lastErr = err
 			continue
 		}
-		
-		b, _ := io.ReadAll(resp.Body)
+
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		resp.Body.Close()
-		conn.Close()
-		
-		if resp.StatusCode != 200 {
-			lastErr = errors.New("non-200: " + resp.Status)
+
+		if err != nil || resp.StatusCode != 200 {
 			continue
 		}
-		
-		ip := strings.TrimSpace(string(b))
-		elapsed := time.Since(start)
-		
-		return Result{
-			Status:    classifyLatency(elapsed),
-			LatencyMs: int(elapsed.Milliseconds()),
-			ExitIP:    ip,
-			Err:       nil,
+
+		ip := strings.TrimSpace(string(body))
+		if ip != "" {
+			return ip
 		}
 	}
-	
-	return Result{Status: types.StatusDown, Err: lastErr}
+
+	return ""
+}
+
+// fetchExitIPViaSOCKS5 makes a separate HTTP request through the SOCKS5 proxy to get the exit IP
+func fetchExitIPViaSOCKS5(ctx context.Context, host string, port int, user, pass *string) string {
+	proxyAddr := net.JoinHostPort(host, strconv.Itoa(port))
+
+	dialer := &socksDialer{
+		proxyAddr: proxyAddr,
+		username:  user,
+		password:  pass,
+	}
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.dialWithContext(ctx, network, addr)
+		},
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   8 * time.Second,
+	}
+
+	for _, endpoint := range ipCheckEndpoints {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "pgw-ip-check/1.0")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		resp.Body.Close()
+
+		if err != nil || resp.StatusCode != 200 {
+			continue
+		}
+
+		ip := strings.TrimSpace(string(body))
+		if ip != "" {
+			return ip
+		}
+	}
+
+	return ""
 }
 
 // socksDialer implements basic SOCKS5 dialer
