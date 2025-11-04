@@ -428,7 +428,7 @@ func main() {
 
 	})
 
-	// GET /v1/mappings/active -> same as GET /v1/mappings (kept for backward-compat)
+	// GET /v1/mappings/active -> filter by health status based on PGW_ENFORCE_HEALTH
 	http.HandleFunc("/v1/mappings/active", func(w http.ResponseWriter, r *http.Request) {
 		role, ok := authorizeRequest(r, cfg.JWTSecret)
 		if !ok {
@@ -446,7 +446,9 @@ func main() {
 		}
 		views := st.ListMappings()
 		for i := range views {
-			if strings.ToUpper(views[i].State) == "FAILED" {
+			// When PGW_ENFORCE_HEALTH=false (default): include all mappings
+			// When PGW_ENFORCE_HEALTH=true: skip FAILED mappings
+			if EnforceHealth && strings.ToUpper(views[i].State) == "FAILED" {
 				continue
 			}
 			if ds := deriveMappingState(views[i]); ds != "" {

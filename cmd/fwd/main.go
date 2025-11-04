@@ -37,6 +37,15 @@ func env(k, def string) string {
 	return def
 }
 
+func dialTimeout() time.Duration {
+	if v := os.Getenv("PGW_FWD_DIAL_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return 5 * time.Second
+}
+
 func resolveUpstream(apiBase string, localPort int) (*upstream, error) {
 	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(apiBase, "/")+"/v1/mappings/active", nil)
 	req.Header.Set("Accept", "application/json")
@@ -112,7 +121,7 @@ func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 
 func dialViaProxy(up *upstream, dst *net.TCPAddr) (net.Conn, error) {
 	proxyAddr := fmt.Sprintf("%s:%d", up.Host, up.Port)
-	pc, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+	pc, err := net.DialTimeout("tcp", proxyAddr, dialTimeout())
 	if err != nil {
 		return nil, fmt.Errorf("dial proxy %s: %w", proxyAddr, err)
 	}
@@ -161,7 +170,7 @@ func dialViaProxy(up *upstream, dst *net.TCPAddr) (net.Conn, error) {
 
 func dialViaSOCKS5(up *upstream, dst *net.TCPAddr) (net.Conn, error) {
 	proxyAddr := fmt.Sprintf("%s:%d", up.Host, up.Port)
-	pc, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+	pc, err := net.DialTimeout("tcp", proxyAddr, dialTimeout())
 	if err != nil {
 		return nil, fmt.Errorf("dial SOCKS5 proxy %s: %w", proxyAddr, err)
 	}
