@@ -69,19 +69,40 @@ SUDO
 secr(){ head -c 24 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 48; }
 
 write_env(){ local JWT=$(secr); local AT=$(secr); cat >/etc/pgw/pgw.env <<ENV
-PGW_JWT_SECRET=$JWT
+# PGW environment configuration
+# Comments must be on their own lines. Do NOT put inline comments after values.
+
+# Common / security
+PGW_JWT_SECRET=changeme
+
+# API service
 PGW_API_ADDR=:8080
-PGW_AGENT_ADDR=:9090
-PGW_UI_ADDR=:8081
-PGW_WAN_IFACE=${PGW_WAN_IFACE:-$WAN_IFACE_DEFAULT}
-PGW_LAN_IFACE=${PGW_LAN_IFACE:-$LAN_IFACE_DEFAULT}
-PGW_FORWARDER_BASE_PORT=$FWD_BASE
-PGW_FWD_MAX_PORT=$FWD_MAX
-PGW_AGENT_TOKEN=$AT
 PGW_STORE=file
 PGW_STORE_PATH=/var/lib/pgw/state.json
-PGW_ADMIN_USER=admin
-PGW_ADMIN_PASS=ChangeMe$(head -c4 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c6)
+PGW_HEALTH_INTERVAL=30s
+
+# Agent service
+PGW_AGENT_ADDR=:9090
+PGW_API_BASE=http://127.0.0.1:8080
+PGW_WAN_IFACE=eth0
+PGW_LAN_IFACE=ens19
+PGW_AGENT_TOKEN=fDjKOZ4JWHilLL7tgKSgZ3m8gWrKgnq
+
+# UI service
+PGW_UI_ADDR=:8081
+PGW_UI_API=http://127.0.0.1:8080
+PGW_UI_AGENT=http://127.0.0.1:9090/agent
+
+# Forwarder settings
+# PGW_FWD_ADDR=:15001
+PGW_FWD_BASE_PORT=15001
+PGW_FWD_MAX_PORT=15050
+
+# Admin bootstrap (API login)
+PGW_ADMIN_USER=chinsu
+PGW_ADMIN_PASS_HASH=$argon2id$v=19$m=65536,t=3,p=2$lPcSZoThZzx0UjVK/sA9lQ$93da8lFOanYsqxlKct9W6mTplriJ7AOdHHgSIo5g74I
+# PGW_ADMIN_PASS=
+
 ENV
 chmod 0640 /etc/pgw/pgw.env; }
 
