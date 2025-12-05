@@ -68,7 +68,7 @@ SUDO
 
 secr(){ head -c 24 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 48; }
 
-write_env(){ local JWT=$(secr); local AT=$(secr); cat >/etc/pgw/pgw.env <<ENV
+write_env(){ local JWT=$(secr); local AT=$(secr); cat >/etc/pgw/pgw.env <<'ENV'
 # PGW environment configuration
 # Comments must be on their own lines. Do NOT put inline comments after values.
 
