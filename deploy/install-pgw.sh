@@ -30,7 +30,7 @@ P
 
 clone_repo(){ install -d -m 0755 "$REPO_DIR"; if [[ ! -d "$REPO_DIR/.git" ]]; then git clone -b main "$REPO_HTTPS" "$REPO_DIR"; else git -C "$REPO_DIR" pull --ff-only origin main; fi; }
 
-build_install(){ local G=/usr/local/go/bin/go; (cd "$REPO_DIR"; mkdir -p bin; "$G" build -o bin/pgw-api   ./cmd/api; "$G" build -o bin/pgw-agent ./cmd/agent; "$G" build -o bin/pgw-ui ./cmd/ui; "$G" build -o bin/pgw-fwd ./cmd/fwd); install -m 0755 "$REPO_DIR"/bin/pgw-* /usr/local/bin/; }
+build_install(){ local G=/usr/local/go/bin/go; (cd "$REPO_DIR"; mkdir -p bin; "$G" build -o bin/pgw-api   ./cmd/api; "$G" build -o bin/pgw-agent ./cmd/agent; "$G" build -o bin/pgw-ui ./cmd/ui; "$G" build -o bin/pgw-fwd ./cmd/fwd; "$G" build -o bin/pgw-webhook ./cmd/webhook); install -m 0755 "$REPO_DIR"/bin/pgw-* /usr/local/bin/; }
 
 install_web(){ 
   install -d -m 0755 /usr/local/share/pgw/web/static
@@ -107,6 +107,11 @@ PGW_FWD_MAX_PORT=15050
 PGW_FWD_LOG_SAMPLE=100
 PGW_FWD_MAX_CONNS=8192
 PGW_FWD_IDLE_TIMEOUT=30m
+
+# Webhook service (auto-deployment)
+PGW_WEBHOOK_SECRET=$(secr)
+PGW_WEBHOOK_PORT=9091
+PGW_WEBHOOK_DEPLOY_SCRIPT=/usr/local/bin/update-pgw.sh
 
 # Admin bootstrap (API login)
 PGW_ADMIN_USER=admin
@@ -231,7 +236,32 @@ TasksMax=65536
 [Install]
 WantedBy=multi-user.target
 U
-systemctl daemon-reload; systemctl enable --now pgw-api pgw-agent pgw-ui pgw-health; }
+cat >/etc/systemd/system/pgw-webhook.service <<U
+[Unit]
+Description=PGW GitHub Webhook Deployment Service
+Documentation=https://github.com/Chinsusu/proxy-server-local
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/proxy-server-local
+ExecStart=/usr/local/bin/pgw-webhook
+Restart=always
+RestartSec=5
+EnvironmentFile=/etc/pgw/pgw.env
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log /var/backups/pgw /var/run /opt/proxy-server-local
+LimitNOFILE=65536
+[Install]
+WantedBy=multi-user.target
+U
+install -m 0755 "$REPO_DIR/deploy/update-pgw.sh" /usr/local/bin/update-pgw.sh
+mkdir -p /var/backups/pgw /var/log
+systemctl daemon-reload; systemctl enable --now pgw-api pgw-agent pgw-ui pgw-health pgw-webhook; }
 
 start_fwds(){ for p in $(seq $FWD_BASE $FWD_MAX); do systemctl start pgw-fwd@"$p" || true; done; }
 

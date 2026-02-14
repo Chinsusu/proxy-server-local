@@ -1,0 +1,29 @@
+[Unit]
+Description=PGW GitHub Webhook Deployment Service
+Documentation=https://github.com/Chinsusu/proxy-server-local
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/proxy-server-local
+ExecStart=/usr/local/bin/pgw-webhook
+Restart=always
+RestartSec=5
+
+# Environment configuration
+EnvironmentFile=/etc/pgw/pgw.env
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log /var/backups/pgw /var/run /opt/proxy-server-local
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
