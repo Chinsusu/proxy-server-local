@@ -29,6 +29,15 @@ func main() {
 	cfg := config.LoadAPI()
 	config.ValidateJWTSecret(cfg.JWTSecret)
 
+	// startup config validation (non-fatal, log warnings)
+	for _, r := range config.ValidateStartup() {
+		if !r.OK {
+			logging.Warn.Printf("[startup] %s/%s: %s", r.Component, r.Check, r.Message)
+		} else {
+			logging.Info.Printf("[startup] %s/%s: %s", r.Component, r.Check, r.Message)
+		}
+	}
+
 	adminUser := strings.TrimSpace(os.Getenv("PGW_ADMIN_USER"))
 	adminPassHash := strings.TrimSpace(os.Getenv("PGW_ADMIN_PASS_HASH"))
 	adminPass := strings.TrimSpace(os.Getenv("PGW_ADMIN_PASS"))

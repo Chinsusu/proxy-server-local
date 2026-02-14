@@ -17,3 +17,5 @@
 
 ### Improved
 - **Parallel health checks** — `runHealthTick` now uses a worker pool (max 10 concurrent) instead of sequential checks, significantly faster with many proxies.
+- **Structured logging** — Added `log/slog` JSON handler alongside legacy loggers for structured, machine-parseable log output. New code can use `logging.L` (slog) or `logging.With()` for context fields. Legacy `logging.Info/Warn/Error` kept for backward compatibility.
+- **Startup config validation** — API validates network interfaces (`PGW_WAN_IFACE`, `PGW_LAN_IFACE`), `nft` binary availability, forwarder port range, and data directory at startup, logging warnings for any issues found.
