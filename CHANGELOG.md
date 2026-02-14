@@ -1,0 +1,19 @@
+# Changelog
+
+## [1.2.0] - 2026-02-14
+
+### Fixed
+- **Critical: `ListMappings` bug** — PENDING mappings were invisible because `append` was incorrectly nested inside `if m.LastAppliedAt != nil` block in `memoryStore`. New mappings now appear immediately in UI and Agent.
+
+### Security
+- **JWT secret validation at startup** — API refuses to start if `PGW_JWT_SECRET` is the insecure default (`dev-change-me`) or shorter than 32 characters. Bypass with `PGW_JWT_STRICT=false` for development.
+- **Login rate limiting** — 5 failed login attempts per IP within 15 minutes triggers `429 Too Many Requests`.
+- **Request body size limits** — All POST endpoints now enforce 1 MB max body via `http.MaxBytesReader`.
+
+### Added
+- **Unit tests** — 25 tests across `pkg/store`, `pkg/auth`, `pkg/config` covering CRUD, cascade deletes, JWT sign/parse, Argon2id hash/verify, and config validation.
+- **Forwarder hot-reload** — `pgw-fwd` now polls API every 30s (configurable via `PGW_FWD_POLL_INTERVAL`) and supports `SIGHUP` for immediate upstream re-resolve. No restart needed when proxy changes.
+- **Graceful shutdown** — API server handles `SIGTERM`/`SIGINT` with 10s drain timeout.
+
+### Improved
+- **Parallel health checks** — `runHealthTick` now uses a worker pool (max 10 concurrent) instead of sequential checks, significantly faster with many proxies.

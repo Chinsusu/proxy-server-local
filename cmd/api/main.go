@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Chinsusu/proxy-server-local/pkg/auth"
@@ -24,6 +27,7 @@ import (
 
 func main() {
 	cfg := config.LoadAPI()
+	config.ValidateJWTSecret(cfg.JWTSecret)
 
 	adminUser := strings.TrimSpace(os.Getenv("PGW_ADMIN_USER"))
 	adminPassHash := strings.TrimSpace(os.Getenv("PGW_ADMIN_PASS_HASH"))
@@ -56,6 +60,9 @@ func main() {
 		st = store.NewMemory()
 	}
 
+	// login rate limiter: 5 failed attempts per 15 minutes per IP
+	loginRL := httpx.NewLoginRateLimiter(5, 15*time.Minute)
+
 	// background health
 	interval := config.LoadHealth().Interval
 	go func() {
@@ -78,6 +85,14 @@ func main() {
 			w.WriteHeader(405)
 			return
 		}
+		// rate limit by remote IP
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if !loginRL.Allow(ip) {
+			httpx.JSON(w, 429, map[string]string{"error": "too many login attempts, try again later"})
+			return
+		}
+		// limit request body to 1 MB
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var req struct{ Username, Password string }
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpx.JSON(w, 400, map[string]string{"error": "bad json"})
@@ -88,9 +103,11 @@ func main() {
 			return
 		}
 		if !checkAdmin(req.Username, req.Password) {
+			loginRL.RecordFailure(ip)
 			httpx.JSON(w, 401, map[string]string{"error": "invalid credentials"})
 			return
 		}
+		loginRL.Reset(ip)
 		tok, exp, err := auth.SignJWT(adminUser, "admin", cfg.JWTSecret, 12*time.Hour)
 		if err != nil {
 			logging.Error.Println("sign jwt:", err)
@@ -129,6 +146,7 @@ func main() {
 			httpx.JSON(w, 200, ps)
 		case http.MethodPost:
 			logging.Info.Printf("[DEBUG] POST /v1/proxies called")
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 			var p types.Proxy
 			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 				httpx.JSON(w, 400, map[string]string{"error": "bad json"})
@@ -261,6 +279,7 @@ func main() {
 
 		case http.MethodPost:
 			logging.Info.Printf("[DEBUG] POST /v1/mappings called")
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 			var c types.Client
 			if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 				httpx.JSON(w, 400, map[string]string{"error": "bad json"})
@@ -347,6 +366,7 @@ func main() {
 			httpx.JSON(w, 200, views)
 		case http.MethodPost:
 			logging.Info.Printf("[DEBUG] POST /v1/mappings called")
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 			var m types.Mapping
 			if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 				httpx.JSON(w, 400, map[string]string{"error": "bad json"})
@@ -574,8 +594,23 @@ func main() {
 		}
 	})
 
+	server := &http.Server{Addr: cfg.Addr}
+
+	// graceful shutdown on SIGTERM/SIGINT
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		sig := <-sigCh
+		logging.Info.Printf("received %s, shutting down...", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			logging.Error.Printf("shutdown error: %v", err)
+		}
+	}()
+
 	logging.Info.Printf("pgw-api listening on %s\n", cfg.Addr)
-	if err := http.ListenAndServe(cfg.Addr, nil); err != nil {
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logging.Error.Println(err)
 		os.Exit(1)
 	}
@@ -596,24 +631,34 @@ func reconcileNow() error {
 }
 
 func runHealthTick(st store.Store) {
-	for _, p := range st.ListProxies() {
+	proxies := st.ListProxies()
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 10) // max 10 concurrent checks
+	for _, p := range proxies {
 		if p.Type != "http" && p.Type != "socks5" {
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-		var res check.Result
-		if p.Type == "socks5" {
-			res = check.CheckSOCKS5(ctx, p.Host, p.Port, p.Username, p.Password)
-		} else {
-			res = check.CheckHTTP(ctx, p.Host, p.Port, p.Username, p.Password)
-		}
-		cancel()
-		if res.Err != nil {
-			st.SetProxyTelemetry(p.ID, types.StatusDown, 0, "")
-		} else {
-			st.SetProxyTelemetry(p.ID, res.Status, res.LatencyMs, res.ExitIP)
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(p types.Proxy) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			var res check.Result
+			if p.Type == "socks5" {
+				res = check.CheckSOCKS5(ctx, p.Host, p.Port, p.Username, p.Password)
+			} else {
+				res = check.CheckHTTP(ctx, p.Host, p.Port, p.Username, p.Password)
+			}
+			cancel()
+			if res.Err != nil {
+				st.SetProxyTelemetry(p.ID, types.StatusDown, 0, "")
+			} else {
+				st.SetProxyTelemetry(p.ID, res.Status, res.LatencyMs, res.ExitIP)
+			}
+		}(p)
 	}
+	wg.Wait()
 }
 
 // deriveMappingState inspects system state to infer mapping status.

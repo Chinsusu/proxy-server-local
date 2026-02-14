@@ -11,7 +11,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -531,6 +533,12 @@ func handleConn(c net.Conn, up *upstream) {
 func main() {
 	addr := env("PGW_FWD_ADDR", ":15001")
 	api := env("PGW_API_BASE", "http://127.0.0.1:8080")
+	pollInterval := 30 * time.Second
+	if v := os.Getenv("PGW_FWD_POLL_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			pollInterval = d
+		}
+	}
 
 	localPort := 15001
 	if strings.HasPrefix(addr, ":") {
@@ -541,17 +549,57 @@ func main() {
 		logging.Error.Fatalf("[fwd] resolve upstream: %v", err)
 	}
 
+	// atomic pointer for hot-reload
+	var upPtr atomic.Pointer[upstream]
+	upPtr.Store(up)
+
+	// background poll: re-resolve upstream every pollInterval
+	go func() {
+		t := time.NewTicker(pollInterval)
+		defer t.Stop()
+		for range t.C {
+			newUp, err := resolveUpstream(api, localPort)
+			if err != nil {
+				logging.Error.Printf("[fwd] poll re-resolve failed: %v", err)
+				continue
+			}
+			old := upPtr.Load()
+			if old.Host != newUp.Host || old.Port != newUp.Port || old.User != newUp.User || old.Pass != newUp.Pass || old.Type != newUp.Type {
+				logging.Info.Printf("[fwd] upstream changed: %s %s:%d → %s %s:%d",
+					old.Type, old.Host, old.Port, newUp.Type, newUp.Host, newUp.Port)
+				upPtr.Store(newUp)
+			}
+		}
+	}()
+
+	// SIGHUP: immediate re-resolve
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGHUP)
+		for range sigCh {
+			logging.Info.Printf("[fwd] SIGHUP received, re-resolving upstream")
+			newUp, err := resolveUpstream(api, localPort)
+			if err != nil {
+				logging.Error.Printf("[fwd] SIGHUP re-resolve failed: %v", err)
+				continue
+			}
+			upPtr.Store(newUp)
+			logging.Info.Printf("[fwd] upstream reloaded: %s %s:%d", newUp.Type, newUp.Host, newUp.Port)
+		}
+	}()
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		logging.Error.Fatalf("[fwd] listen %s: %v", addr, err)
 	}
-	logging.Info.Printf("pgw-fwd listening %s (transparent CONNECT+SNI) → %s proxy %s:%d", addr, up.Type, up.Host, up.Port)
+	logging.Info.Printf("pgw-fwd listening %s (transparent CONNECT+SNI) → %s proxy %s:%d (poll=%s)", addr, up.Type, up.Host, up.Port, pollInterval)
 
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			continue
 		}
-		go handleConn(c, up)
+		currentUp := upPtr.Load()
+		go handleConn(c, currentUp)
 	}
 }

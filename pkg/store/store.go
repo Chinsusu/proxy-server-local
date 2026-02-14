@@ -156,9 +156,9 @@ func (s *memoryStore) ListMappings() []types.MappingView {
 		if m.LastAppliedAt != nil {
 			r.ts = *m.LastAppliedAt
 			r.has = true
+		}
 		tmp = append(tmp, r)
 	}
-}
 	sort.SliceStable(tmp, func(i, j int) bool {
 		if tmp[i].has && tmp[j].has {
 			return tmp[i].ts.After(tmp[j].ts)
