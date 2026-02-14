@@ -32,7 +32,15 @@ clone_repo(){ install -d -m 0755 "$REPO_DIR"; if [[ ! -d "$REPO_DIR/.git" ]]; th
 
 build_install(){ local G=/usr/local/go/bin/go; (cd "$REPO_DIR"; mkdir -p bin; "$G" build -o bin/pgw-api   ./cmd/api; "$G" build -o bin/pgw-agent ./cmd/agent; "$G" build -o bin/pgw-ui ./cmd/ui; "$G" build -o bin/pgw-fwd ./cmd/fwd); install -m 0755 "$REPO_DIR"/bin/pgw-* /usr/local/bin/; }
 
-install_web(){ install -d -m 0755 /usr/local/share/pgw/web/static; cp -f "$REPO_DIR"/web/*.html /usr/local/share/pgw/web/; cp -f "$REPO_DIR"/web/static/* /usr/local/share/pgw/web/static/; }
+install_web(){ 
+  install -d -m 0755 /usr/local/share/pgw/web/static
+  # Copy HTML files if they exist (optional - we use embedded templates now)
+  if ls "$REPO_DIR"/web/*.html &gt;/dev/null 2&gt;&1; then
+    cp -f "$REPO_DIR"/web/*.html /usr/local/share/pgw/web/
+  fi
+  # Always copy static assets (CSS, JS)
+  cp -f "$REPO_DIR"/web/static/* /usr/local/share/pgw/web/static/
+}
 
 ensure_user(){ id pgw >/dev/null 2>&1 || useradd --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin pgw; install -d -m 0750 /etc/pgw; install -d -m 0755 /var/lib/pgw/ports; chown -R pgw:pgw /var/lib/pgw; }
 
