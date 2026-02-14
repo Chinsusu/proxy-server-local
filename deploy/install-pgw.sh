@@ -35,7 +35,7 @@ build_install(){ local G=/usr/local/go/bin/go; (cd "$REPO_DIR"; mkdir -p bin; "$
 install_web(){ 
   install -d -m 0755 /usr/local/share/pgw/web/static
   # Copy HTML files if they exist (optional - we use embedded templates now)
-  if ls "$REPO_DIR"/web/*.html &gt;/dev/null 2&gt;&1; then
+  if ls "$REPO_DIR"/web/*.html >/dev/null 2>&1; then
     cp -f "$REPO_DIR"/web/*.html /usr/local/share/pgw/web/
   fi
   # Always copy static assets (CSS, JS)
