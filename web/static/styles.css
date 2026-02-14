@@ -1,14 +1,296 @@
-/* PGW minimal overrides for Bootstrap */
-.sortable { cursor: pointer; }
+/* PGW Dashboard - Dark Mode OLED (AI-Generated Design System) */
 
-#loading-indicator { display: none; align-items: center; gap: .5rem; }
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+:root {
+  /* Dark Mode OLED Color Palette */
+  --primary: #0F172A;
+  /* Slate 900 - Primary surfaces */
+  --secondary: #1E293B;
+  /* Slate 800 - Secondary surfaces */
+  --cta: #22C55E;
+  /* Green 500 - Call to action */
+  --background: #020617;
+  /* Slate 950 - Deep black background */
+  --text: #F8FAFC;
+  /* Slate 50 - High contrast text */
+  --text-muted: #94A3B8;
+  /* Slate 400 - Muted text */
+
+  /* Status Colors */
+  --success: #10B981;
+  /* Emerald 500 */
+  --danger: #EF4444;
+  /* Red 500 */
+  --warning: #F59E0B;
+  /* Amber 500 */
+  --info: #3B82F6;
+  /* Blue 500 */
+
+  /* Sidebar */
+  --sidebar-bg: #0F172A;
+  --sidebar-hover: #1E293B;
+
+  /* Shadows (Subtle in dark mode) */
+  --shadow-sm: 0 2px 6px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 24px 0 rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 48px 0 rgba(0, 0, 0, 0.7);
+
+  /* Glow Effects */
+  --glow-green: 0 0 10px rgba(34, 197, 94, 0.5);
+  --glow-red: 0 0 10px rgba(239, 68, 68, 0.5);
+}
+
+
+/* Typography */
+body {
+  font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background-color: var(--background);
+}
+
+code,
+.monospace,
+.stat-value,
+.proxy-id {
+  font-family: 'Fira Code', 'Courier New', monospace;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Enhanced Cards (Dark Mode) */
+.card {
+  background-color: var(--primary);
+  border: 1px solid var(--secondary);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  overflow: hidden;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--cta);
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 1rem;
+}
+
+.card-header {
+  background: transparent;
+  border-bottom: 1px solid var(--secondary);
+  padding: 1.5rem;
+}
+
+.card-body {
+  padding: 1.5rem;
+}
+
+/* Stats Cards */
+.stat-card {
+  text-align: center;
+  padding: 1.5rem;
+}
+
+.stat-card-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1rem;
+  font-size: 24px;
+}
+
+.stat-card-icon.primary {
+  background: rgba(15, 23, 42, 0.3);
+  color: var(--primary);
+}
+
+.stat-card-icon.success {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+}
+
+.stat-card-icon.info {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--info);
+}
+
+.stat-card-icon.warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+}
+
+.stat-card-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+
+.stat-card-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Buttons */
+.btn {
+  border-radius: 6px;
+  font-weight: 500;
+  padding: 0.5rem 1.25rem;
+  transition: all 0.2s ease;
+}
+
+.btn-primary {
+  background: var(--cta);
+  border-color: var(--cta);
+  color: #000;
+}
+
+.btn-primary:hover {
+  background: #16a34a;
+  border-color: #16a34a;
+  transform: translateY(-1px);
+  box-shadow: var(--glow-green);
+}
+
+.btn-sm {
+  padding: 0.35rem 0.75rem;
+  font-size: 13px;
+}
+
+/* Tables */
+.table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.table thead th {
+  border-bottom: 2px solid var(--secondary);
+  background: var(--secondary);
+  color: var(--text);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  padding: 1rem 1.25rem;
+}
+
+.table tbody tr {
+  transition: background 0.2s ease;
+}
+
+.table tbody tr:hover {
+  background: var(--secondary);
+}
+
+.table td {
+  padding: 1rem 1.25rem;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--secondary);
+}
+
+/* Badges */
+.badge {
+  padding: 0.35rem 0.65rem;
+  font-weight: 500;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.text-bg-success {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+}
+
+.text-bg-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+}
+
+.text-bg-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+}
+
+.text-bg-info {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--info);
+}
+
+.text-bg-secondary {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-muted);
+}
+
+/* Loading Skeleton */
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+@keyframes skeleton-loading {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.skeleton-row {
+  height: 48px;
+  margin-bottom: 8px;
+}
+
+/* PGW minimal overrides for Bootstrap */
+
+.sortable {
+  cursor: pointer;
+}
+
+#loading-indicator {
+  display: none;
+  align-items: center;
+  gap: .5rem;
+}
 
 /***** Utilities *****/
-.text-muted { opacity: .8; }
-.table-nowrap { white-space: nowrap; }
+.text-muted {
+  opacity: .8;
+}
+
+.table-nowrap {
+  white-space: nowrap;
+}
 
 /* Keep alerts visible above content */
-#alerts .alert { margin-bottom: .75rem; }
+#alerts .alert {
+  margin-bottom: .75rem;
+}
+
 /* --- Dark theme overrides --- */
 :root[data-bs-theme="dark"] {
   --pgw-bg: #121416;
@@ -16,30 +298,59 @@
   --pgw-card-bg: #1a1d20;
   --pgw-card-border: #2a2f34;
   --pgw-border: #2e3439;
-  --pgw-table-accent: rgba(255,255,255,0.03);
-  --pgw-table-hover: rgba(255,255,255,0.06);
+  --pgw-table-accent: rgba(255, 255, 255, 0.03);
+  --pgw-table-hover: rgba(255, 255, 255, 0.06);
 }
 
-html[data-bs-theme="dark"] body { background-color: var(--pgw-bg); color: var(--pgw-fg); }
+html[data-bs-theme="dark"] body {
+  background-color: var(--pgw-bg);
+  color: var(--pgw-fg);
+}
 
-html[data-bs-theme="dark"] .card { background-color: var(--pgw-card-bg); border-color: var(--pgw-card-border); }
-html[data-bs-theme="dark"] .card-header { background-color: transparent; border-bottom-color: var(--pgw-border); }
+html[data-bs-theme="dark"] .card {
+  background-color: var(--pgw-card-bg);
+  border-color: var(--pgw-card-border);
+}
 
-html[data-bs-theme="dark"] .table { color: var(--pgw-fg); }
-html[data-bs-theme="dark"] .table > :not(caption) > * > * { border-color: var(--pgw-border); }
-html[data-bs-theme="dark"] .table-striped > tbody > tr:nth-of-type(odd) > * { background-color: var(--pgw-table-accent); }
-html[data-bs-theme="dark"] .table-hover > tbody > tr:hover > * { background-color: var(--pgw-table-hover); }
+html[data-bs-theme="dark"] .card-header {
+  background-color: transparent;
+  border-bottom-color: var(--pgw-border);
+}
 
-html[data-bs-theme="dark"] .text-muted { opacity: .75; }
+html[data-bs-theme="dark"] .table {
+  color: var(--pgw-fg);
+}
+
+html[data-bs-theme="dark"] .table> :not(caption)>*>* {
+  border-color: var(--pgw-border);
+}
+
+html[data-bs-theme="dark"] .table-striped>tbody>tr:nth-of-type(odd)>* {
+  background-color: var(--pgw-table-accent);
+}
+
+html[data-bs-theme="dark"] .table-hover>tbody>tr:hover>* {
+  background-color: var(--pgw-table-hover);
+}
+
+html[data-bs-theme="dark"] .text-muted {
+  opacity: .75;
+}
+
 /* Overlay toast container to avoid layout shifts */
 #alerts {
   position: fixed;
   top: 1rem;
   right: 1rem;
-  z-index: 1080; /* above navbar */
+  z-index: 1080;
+  /* above navbar */
   display: flex;
   flex-direction: column;
   gap: .5rem;
-  pointer-events: none; /* allow clicking through except on toasts */
+  pointer-events: none;
+  /* allow clicking through except on toasts */
 }
-#alerts .toast { pointer-events: auto; }
+
+#alerts .toast {
+  pointer-events: auto;
+}
