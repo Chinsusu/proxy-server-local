@@ -2,6 +2,7 @@
 package store
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"sort"
 	"os"
@@ -20,9 +21,10 @@ type fileState struct {
 }
 
 type fileStore struct {
-	mu    sync.RWMutex
-	path  string
-	state fileState
+	mu           sync.RWMutex
+	path         string
+	state        fileState
+	lastSaveHash [32]byte // SHA-256 of last written state
 }
 
 func NewFile(path string) Store {
@@ -48,15 +50,22 @@ func (s *fileStore) load() error {
 	if st.Clients == nil { st.Clients = map[string]types.Client{} }
 	if st.Mappings == nil { st.Mappings = map[string]types.Mapping{} }
 	s.state = st
+	s.lastSaveHash = sha256.Sum256(b)
 	return nil
 }
 
 func (s *fileStore) save() error {
-	tmp := s.path + ".tmp"
 	b, err := json.MarshalIndent(s.state, "", "  ")
 	if err != nil { return err }
+	h := sha256.Sum256(b)
+	if h == s.lastSaveHash {
+		return nil // nothing changed on disk
+	}
+	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o640); err != nil { return err }
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil { return err }
+	s.lastSaveHash = h
+	return nil
 }
 
 // ---------- Proxies ----------

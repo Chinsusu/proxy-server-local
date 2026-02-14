@@ -136,9 +136,9 @@ EnvironmentFile=/etc/pgw/pgw.env
 ExecStart=/usr/local/bin/pgw-api
 Restart=always
 RestartSec=2s
-LimitNOFILE=65536
-MemoryMax=512M
-TasksMax=4096
+LimitNOFILE=131072
+MemoryMax=1G
+TasksMax=8192
 [Install]
 WantedBy=multi-user.target
 U
@@ -207,9 +207,9 @@ Environment=PGW_API_BASE=http://127.0.0.1:8080
 ExecStart=/usr/local/bin/pgw-fwd
 Restart=always
 RestartSec=2s
-LimitNOFILE=32768
-MemoryMax=128M
-TasksMax=1024
+LimitNOFILE=131072
+MemoryMax=1G
+TasksMax=65536
 [Install]
 WantedBy=multi-user.target
 U

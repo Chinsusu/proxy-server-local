@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -99,13 +100,12 @@ func main() {
 	}
 }
 
+// lastScriptHash caches SHA-256 of the last successfully applied nft script.
+var lastScriptHash string
+
 func reconcile(cfg cfgAgent) error {
 	reconMu.Lock()
 	defer reconMu.Unlock()
-
-	// Xoá bảng cũ (nếu có) bằng lệnh riêng, bỏ qua lỗi nếu chưa tồn tại
-	_ = runCmdIgnoreErr(cfg.NftBinary, "delete", "table", "ip", "pgw")
-	_ = runCmdIgnoreErr(cfg.NftBinary, "delete", "table", "inet", "pgw_filter")
 
 	mvs, err := fetchMappings(cfg.APIBase)
 	if err != nil {
@@ -113,7 +113,17 @@ func reconcile(cfg cfgAgent) error {
 	}
 	script := renderRules(cfg, mvs)
 
-	// Add mới tất cả trong 1 shot
+	// Hash the desired script — skip nft if rules are identical to last apply
+	h := sha256.Sum256([]byte(script))
+	scriptHash := fmt.Sprintf("%x", h)
+	if scriptHash == lastScriptHash {
+		return nil // nothing changed
+	}
+
+	// Xoá bảng cũ (nếu có) bằng lệnh riêng, bỏ qua lỗi nếu chưa tồn tại
+	_ = runCmdIgnoreErr(cfg.NftBinary, "delete", "table", "ip", "pgw")
+	_ = runCmdIgnoreErr(cfg.NftBinary, "delete", "table", "inet", "pgw_filter")
+
 	// Determine the set of mapping IDs that were considered (have valid local port)
 	type item struct{ id string; port int }
 	selected := []item{}
@@ -124,12 +134,14 @@ func reconcile(cfg cfgAgent) error {
 	}
 
 	if err := runCmdWithInput(cfg.NftBinary, script); err != nil {
+		lastScriptHash = "" // force re-apply next tick
 		// mark failed for all selected mappings
 		for _, it := range selected {
 			_ = updateMappingState(cfg.APIBase, it.id, "FAILED", it.port)
 		}
 		return fmt.Errorf("nft apply: %w", err)
 	}
+	lastScriptHash = scriptHash
 	// success → mark applied
 	for _, it := range selected {
 		_ = updateMappingState(cfg.APIBase, it.id, "APPLIED", it.port)

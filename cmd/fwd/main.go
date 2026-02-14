@@ -28,6 +28,12 @@ const SO_ORIGINAL_DST = 80
 // connCount tracks total connections for sampled logging.
 var connCount atomic.Uint64
 
+// activeConns tracks currently open connections.
+var activeConns atomic.Int64
+
+// connSem limits max concurrent connections. Initialized in main().
+var connSem chan struct{}
+
 // logSample controls how often successful connections are logged (1 in N).
 var logSample uint64 = 100
 
@@ -473,9 +479,22 @@ func maskHost(h string) string {
 	return strings.Join(parts, ".")
 }
 
+// idleTimeout is used by splice to terminate idle connections.
+var idleTimeout = 30 * time.Minute
+
 func splice(dst, src net.Conn) {
-	_ = dst.SetDeadline(time.Now().Add(10 * time.Minute))
-	_ = src.SetDeadline(time.Now().Add(10 * time.Minute))
+	// Enable TCP keepalive if possible
+	if tc, ok := dst.(*net.TCPConn); ok {
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(30 * time.Second)
+	}
+	if tc, ok := src.(*net.TCPConn); ok {
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(30 * time.Second)
+	}
+	// Use idle timeout — extends on each data transfer
+	_ = dst.SetDeadline(time.Now().Add(idleTimeout))
+	_ = src.SetDeadline(time.Now().Add(idleTimeout))
 	io.Copy(dst, src)
 }
 
@@ -550,10 +569,24 @@ func main() {
 			pollInterval = d
 		}
 	}
-	// log sample rate: log 1 in N successful connections (default 100)
+	// connection limiter
+	maxConns := 8192
+	if v := os.Getenv("PGW_FWD_MAX_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxConns = n
+		}
+	}
+	connSem = make(chan struct{}, maxConns)
+	logging.Info.Printf("[fwd] max concurrent connections: %d", maxConns)
 	if v := os.Getenv("PGW_FWD_LOG_SAMPLE"); v != "" {
 		if n, err := strconv.ParseUint(v, 10, 64); err == nil && n > 0 {
 			logSample = n
+		}
+	}
+	// idle timeout for spliced connections (default 30m)
+	if v := os.Getenv("PGW_FWD_IDLE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			idleTimeout = d
 		}
 	}
 
@@ -616,7 +649,23 @@ func main() {
 		if err != nil {
 			continue
 		}
+		// try to acquire semaphore; drop if at capacity
+		select {
+		case connSem <- struct{}{}:
+			// acquired
+		default:
+			c.Close()
+			logging.Warn.Printf("[fwd] connection limit reached (%d active), dropping", activeConns.Load())
+			continue
+		}
+		activeConns.Add(1)
 		currentUp := upPtr.Load()
-		go handleConn(c, currentUp)
+		go func() {
+			defer func() {
+				<-connSem
+				activeConns.Add(-1)
+			}()
+			handleConn(c, currentUp)
+		}()
 	}
 }
