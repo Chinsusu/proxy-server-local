@@ -68,12 +68,12 @@ SUDO
 
 secr(){ head -c 24 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 48; }
 
-write_env(){ local JWT=$(secr); local AT=$(secr); cat >/etc/pgw/pgw.env <<'ENV'
+write_env(){ local JWT=$(secr); local AT=$(secr); cat >/etc/pgw/pgw.env <<ENV
 # PGW environment configuration
-# Comments must be on their own lines. Do NOT put inline comments after values.
+# Generated at $(date -Is)
 
 # Common / security
-PGW_JWT_SECRET=changeme
+PGW_JWT_SECRET=$JWT
 
 # API service
 PGW_API_ADDR=:8080
@@ -86,7 +86,7 @@ PGW_AGENT_ADDR=:9090
 PGW_API_BASE=http://127.0.0.1:8080
 PGW_WAN_IFACE=eth0
 PGW_LAN_IFACE=ens19
-PGW_AGENT_TOKEN=fDjKOZ4JWHilLL7tgKSgZ3m8gWrKgnq
+PGW_AGENT_TOKEN=$AT
 
 # UI service
 PGW_UI_ADDR=:8081
@@ -94,14 +94,14 @@ PGW_UI_API=http://127.0.0.1:8080
 PGW_UI_AGENT=http://127.0.0.1:9090/agent
 
 # Forwarder settings
-# PGW_FWD_ADDR=:15001
 PGW_FWD_BASE_PORT=15001
 PGW_FWD_MAX_PORT=15050
+PGW_FWD_LOG_SAMPLE=100
 
 # Admin bootstrap (API login)
-PGW_ADMIN_USER=chinsu
-PGW_ADMIN_PASS_HASH=$argon2id$v=19$m=65536,t=3,p=2$lPcSZoThZzx0UjVK/sA9lQ$93da8lFOanYsqxlKct9W6mTplriJ7AOdHHgSIo5g74I
-# PGW_ADMIN_PASS=
+PGW_ADMIN_USER=admin
+# Set PGW_ADMIN_PASS on first run, then replace with hash:
+# PGW_ADMIN_PASS=your-password
 
 ENV
 chmod 0640 /etc/pgw/pgw.env; }
@@ -118,6 +118,12 @@ filter-AAAA
 CONF
 systemctl enable --now dnsmasq || true; }
 
+setup_journald(){
+  install -d -m 0755 /etc/systemd/journald.conf.d
+  cp -f "$REPO_DIR/deploy/journald-pgw.conf" /etc/systemd/journald.conf.d/pgw.conf
+  systemctl restart systemd-journald || true
+}
+
 units(){ cat >/etc/systemd/system/pgw-api.service <<U
 [Unit]
 Description=PGW API
@@ -130,6 +136,9 @@ EnvironmentFile=/etc/pgw/pgw.env
 ExecStart=/usr/local/bin/pgw-api
 Restart=always
 RestartSec=2s
+LimitNOFILE=65536
+MemoryMax=512M
+TasksMax=4096
 [Install]
 WantedBy=multi-user.target
 U
@@ -146,6 +155,9 @@ EnvironmentFile=/etc/pgw/pgw.env
 ExecStart=/usr/local/bin/pgw-agent
 Restart=always
 RestartSec=2s
+LimitNOFILE=65536
+MemoryMax=256M
+TasksMax=1024
 [Install]
 WantedBy=multi-user.target
 U
@@ -161,6 +173,8 @@ EnvironmentFile=/etc/pgw/pgw.env
 ExecStart=/usr/local/bin/pgw-ui
 Restart=always
 RestartSec=2s
+LimitNOFILE=32768
+MemoryMax=128M
 [Install]
 WantedBy=multi-user.target
 U
@@ -193,6 +207,9 @@ Environment=PGW_API_BASE=http://127.0.0.1:8080
 ExecStart=/usr/local/bin/pgw-fwd
 Restart=always
 RestartSec=2s
+LimitNOFILE=32768
+MemoryMax=128M
+TasksMax=1024
 [Install]
 WantedBy=multi-user.target
 U
@@ -202,6 +219,6 @@ start_fwds(){ for p in $(seq $FWD_BASE $FWD_MAX); do systemctl start pgw-fwd@"$p
 
 notes(){ install -d -m 0755 /etc/pgw; date -Is > /etc/pgw/INSTALL_NOTES.txt; echo "See /etc/pgw/pgw.env for credentials" >> /etc/pgw/INSTALL_NOTES.txt; }
 
-main(){ need_root; ensure_packages; ensure_sysctl; install_go; clone_repo; build_install; install_web; ensure_user; setup_sudoers; write_env; conf_dns; units; start_fwds; notes; echo "OK: install done."; }
+main(){ need_root; ensure_packages; ensure_sysctl; install_go; clone_repo; build_install; install_web; ensure_user; setup_sudoers; write_env; conf_dns; setup_journald; units; start_fwds; notes; echo "OK: install done."; }
 
 main "$@"
