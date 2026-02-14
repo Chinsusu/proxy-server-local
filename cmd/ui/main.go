@@ -47,7 +47,7 @@ func main() {
 	jwtSecret = cfg.JWTSecret
 
 	// Determine web directory path
-	webDir = "/usr/local/share/pgw/web"
+	webDir = "/opt/proxy-server-local/web"
 	if _, err := os.Stat(webDir); os.IsNotExist(err) {
 		// Fallback to embedded templates if web directory doesn't exist
 		webDir = ""
@@ -313,7 +313,7 @@ const embeddedDashboard = `
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PGW Dashboard</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=1771068456">
+  <link rel="stylesheet" href="/static/styles.css?v=1771071543">
 </head>
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
@@ -335,7 +335,7 @@ const embeddedDashboard = `
   <div class="container py-4">
     <div id="alerts"></div>
 
-    <div id="loading-indicator" class="d-flex align-items-center mb-3">
+    <div id="loading-indicator" class="d-flex align-items-center mb-3" style="display: none;">
       <div class="spinner-border text-primary me-2" role="status" style="width:1.5rem;height:1.5rem;"><span class="visually-hidden">Loading...</span></div>
       <span>Loading...</span>
     </div>
@@ -421,7 +421,7 @@ const embeddedDashboard = `
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="/static/app.js?v=1771068456"></script>
+  <script src="/static/app.js?v=1771071543"></script>
 </body>
 </html>`
 
@@ -434,7 +434,7 @@ const embeddedManage = `
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PGW Mapping Management</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=1771068456">
+  <link rel="stylesheet" href="/static/styles.css?v=1771071543">
 </head>
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
@@ -508,7 +508,7 @@ const embeddedManage = `
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="/static/app.js?v=1771068456"></script>
+  <script src="/static/app.js?v=1771071543"></script>
 </body>
 </html>`
 
@@ -520,7 +520,7 @@ const embeddedProxies = `
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PGW Proxy Management</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=1771068456">
+  <link rel="stylesheet" href="/static/styles.css?v=1771071543">
 </head>
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
@@ -618,7 +618,7 @@ const embeddedProxies = `
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="/static/app.js?v=1771068456"></script>
+  <script src="/static/app.js?v=1771071543"></script>
 </body>
 </html>`
 
@@ -627,7 +627,7 @@ const embeddedCSS = `
 /* PGW minimal overrides for Bootstrap */
 .sortable { cursor: pointer; }
 
-#loading-indicator { display: none; align-items: center; gap: .5rem; }
+#loading-indicator { display: none !important; align-items: center; gap: .5rem; }
 
 /***** Utilities *****/
 .text-muted { opacity: .8; }

@@ -48,7 +48,7 @@ body {
   font-size: 14px;
   line-height: 1.5;
   color: var(--text);
-  background-color: var(--background);
+  background-color: var(--background) !important;
 }
 
 code,
@@ -353,4 +353,4 @@ html[data-bs-theme="dark"] .text-muted {
 
 #alerts .toast {
   pointer-events: auto;
-}
+}#loading-indicator { display: none !important; align-items: center; gap: .5rem; }
