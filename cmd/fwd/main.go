@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -644,10 +645,48 @@ func main() {
 	}
 	logging.Info.Printf("pgw-fwd listening %s (transparent CONNECT+SNI) → %s proxy %s:%d (poll=%s)", addr, up.Type, up.Host, up.Port, pollInterval)
 
+	// graceful shutdown: trap SIGTERM/SIGINT
+	var wg sync.WaitGroup
+	shutdownCh := make(chan os.Signal, 1)
+	signal.Notify(shutdownCh, syscall.SIGTERM, syscall.SIGINT)
+
+	go func() {
+		sig := <-shutdownCh
+		logging.Info.Printf("[fwd] received %v, shutting down gracefully...", sig)
+		// stop accepting new connections
+		ln.Close()
+		// wait for active connections to drain (max 30s)
+		drainTimeout := 30 * time.Second
+		if v := os.Getenv("PGW_FWD_DRAIN_TIMEOUT"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil && d > 0 {
+				drainTimeout = d
+			}
+		}
+		done := make(chan struct{})
+		go func() { wg.Wait(); close(done) }()
+		select {
+		case <-done:
+			logging.Info.Printf("[fwd] all connections drained, exiting")
+		case <-time.After(drainTimeout):
+			logging.Warn.Printf("[fwd] drain timeout (%s), %d connections still active, force exiting",
+				drainTimeout, activeConns.Load())
+		}
+		os.Exit(0)
+	}()
+
 	for {
 		c, err := ln.Accept()
 		if err != nil {
-			continue
+			// check if listener was closed (graceful shutdown)
+			select {
+			case <-shutdownCh:
+			default:
+			}
+			if activeConns.Load() == 0 {
+				break
+			}
+			// normal error or listener closed — stop loop
+			break
 		}
 		// try to acquire semaphore; drop if at capacity
 		select {
@@ -659,11 +698,13 @@ func main() {
 			continue
 		}
 		activeConns.Add(1)
+		wg.Add(1)
 		currentUp := upPtr.Load()
 		go func() {
 			defer func() {
 				<-connSem
 				activeConns.Add(-1)
+				wg.Done()
 			}()
 			handleConn(c, currentUp)
 		}()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -10,9 +11,11 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"os/signal"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Chinsusu/proxy-server-local/pkg/config"
@@ -94,7 +97,21 @@ func main() {
 	logging.Info.Printf("pgw-agent listening on %s (WAN=%s LAN=%s) API=%s every=%s\n",
 		cfg.Addr, cfg.WANIF, cfg.LANIF, cfg.APIBase, cfg.Interval)
 
-	if err := http.ListenAndServe(cfg.Addr, nil); err != nil {
+	server := &http.Server{Addr: cfg.Addr}
+
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		sig := <-sigCh
+		logging.Info.Printf("[agent] received %s, shutting down...", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			logging.Error.Printf("[agent] shutdown: %v", err)
+		}
+	}()
+
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logging.Error.Println(err)
 		os.Exit(1)
 	}

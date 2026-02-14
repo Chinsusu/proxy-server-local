@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/Chinsusu/proxy-server-local/pkg/config"
 	"log"
@@ -68,9 +71,23 @@ func main() {
 		proxyRequest(w, r, "/agent/", baseAgent)
 	})
 
+	server := &http.Server{Addr: addr}
+
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		sig := <-sigCh
+		log.Printf("[INFO] received %s, shutting down...", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("[ERROR] shutdown: %v", err)
+		}
+	}()
+
 	log.Printf("[INFO] pgw-ui listening on %s (API=%s, AGENT=%s)",
 		addr, baseAPI, baseAgent)
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("[ERROR] Failed to start server: %v", err)
 	}
 }
