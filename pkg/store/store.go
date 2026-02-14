@@ -32,6 +32,15 @@ type Store interface {
 
 	// Telemetry
 	SetProxyTelemetry(id string, status types.ProxyStatus, latency int, exitIP string)
+	SetProxyTelemetryBatch(updates []TelemetryUpdate)
+}
+
+// TelemetryUpdate holds a single proxy telemetry result for batch updates.
+type TelemetryUpdate struct {
+	ID      string
+	Status  types.ProxyStatus
+	Latency int
+	ExitIP  string
 }
 
 type memoryStore struct {
@@ -220,6 +229,17 @@ func (s *memoryStore) UpdateMappingState(id string, state string, localPort int)
 
 func (s *memoryStore) SetProxyTelemetry(id string, status types.ProxyStatus, latency int, exitIP string) {
 	s.mu.Lock(); defer s.mu.Unlock()
+	s.applyTelemetry(id, status, latency, exitIP)
+}
+
+func (s *memoryStore) SetProxyTelemetryBatch(updates []TelemetryUpdate) {
+	s.mu.Lock(); defer s.mu.Unlock()
+	for _, u := range updates {
+		s.applyTelemetry(u.ID, u.Status, u.Latency, u.ExitIP)
+	}
+}
+
+func (s *memoryStore) applyTelemetry(id string, status types.ProxyStatus, latency int, exitIP string) {
 	p, ok := s.proxies[id]; if !ok { return }
 	now := time.Now()
 	p.Status = status

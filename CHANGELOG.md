@@ -19,3 +19,8 @@
 - **Parallel health checks** — `runHealthTick` now uses a worker pool (max 10 concurrent) instead of sequential checks, significantly faster with many proxies.
 - **Structured logging** — Added `log/slog` JSON handler alongside legacy loggers for structured, machine-parseable log output. New code can use `logging.L` (slog) or `logging.With()` for context fields. Legacy `logging.Info/Warn/Error` kept for backward compatibility.
 - **Startup config validation** — API validates network interfaces (`PGW_WAN_IFACE`, `PGW_LAN_IFACE`), `nft` binary availability, forwarder port range, and data directory at startup, logging warnings for any issues found.
+
+### Fixed (Disk Full Prevention)
+- **Batch telemetry writes** — Health check tick now calls `SetProxyTelemetryBatch()` once per tick instead of `SetProxyTelemetry()` per proxy, reducing disk writes from N×`save()` to 1×`save()` per tick cycle.
+- **Sampled forwarder logging** — `pgw-fwd` now logs 1 in every 100 successful connections (configurable via `PGW_FWD_LOG_SAMPLE`), reducing log volume by ~99% under heavy traffic. Errors always logged.
+- **Journald size limit** — Added `deploy/journald-pgw.conf` drop-in (`SystemMaxUse=500M`, `SystemKeepFree=1G`, rotate weekly) to prevent unbounded journal growth.

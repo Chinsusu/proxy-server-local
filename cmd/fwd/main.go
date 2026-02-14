@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -23,6 +24,12 @@ import (
 )
 
 const SO_ORIGINAL_DST = 80
+
+// connCount tracks total connections for sampled logging.
+var connCount atomic.Uint64
+
+// logSample controls how often successful connections are logged (1 in N).
+var logSample uint64 = 100
 
 type upstream struct {
 	Type string
@@ -518,11 +525,15 @@ func handleConn(c net.Conn, up *upstream) {
 	}
 
 	if host != "" {
-		logging.Info.Printf("[fwd] %s -> %s host=%s via %s %s:%d OK",
-			c.RemoteAddr().String(), dst.String(), maskHost(host), up.Type, up.Host, up.Port)
+		if n := connCount.Add(1); n%logSample == 1 || logSample == 1 {
+			logging.Info.Printf("[fwd] %s -> %s host=%s via %s %s:%d OK (conn #%d)",
+				c.RemoteAddr().String(), dst.String(), maskHost(host), up.Type, up.Host, up.Port, n)
+		}
 	} else {
-		logging.Info.Printf("[fwd] %s -> %s via %s %s:%d OK",
-			c.RemoteAddr().String(), dst.String(), up.Type, up.Host, up.Port)
+		if n := connCount.Add(1); n%logSample == 1 || logSample == 1 {
+			logging.Info.Printf("[fwd] %s -> %s via %s %s:%d OK (conn #%d)",
+				c.RemoteAddr().String(), dst.String(), up.Type, up.Host, up.Port, n)
+		}
 	}
 
 	// splice both directions
@@ -537,6 +548,12 @@ func main() {
 	if v := os.Getenv("PGW_FWD_POLL_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			pollInterval = d
+		}
+	}
+	// log sample rate: log 1 in N successful connections (default 100)
+	if v := os.Getenv("PGW_FWD_LOG_SAMPLE"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil && n > 0 {
+			logSample = n
 		}
 	}
 

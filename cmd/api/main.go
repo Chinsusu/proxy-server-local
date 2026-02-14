@@ -641,6 +641,14 @@ func reconcileNow() error {
 
 func runHealthTick(st store.Store) {
 	proxies := st.ListProxies()
+	type result struct {
+		id      string
+		status  types.ProxyStatus
+		latency int
+		exitIP  string
+	}
+	results := make(chan result, len(proxies))
+
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 10) // max 10 concurrent checks
 	for _, p := range proxies {
@@ -661,13 +669,28 @@ func runHealthTick(st store.Store) {
 			}
 			cancel()
 			if res.Err != nil {
-				st.SetProxyTelemetry(p.ID, types.StatusDown, 0, "")
+				results <- result{id: p.ID, status: types.StatusDown}
 			} else {
-				st.SetProxyTelemetry(p.ID, res.Status, res.LatencyMs, res.ExitIP)
+				results <- result{id: p.ID, status: res.Status, latency: res.LatencyMs, exitIP: res.ExitIP}
 			}
 		}(p)
 	}
-	wg.Wait()
+	// close channel after all goroutines finish
+	go func() { wg.Wait(); close(results) }()
+
+	// collect all results, then batch-update once
+	var updates []store.TelemetryUpdate
+	for r := range results {
+		updates = append(updates, store.TelemetryUpdate{
+			ID:      r.id,
+			Status:  r.status,
+			Latency: r.latency,
+			ExitIP:  r.exitIP,
+		})
+	}
+	if len(updates) > 0 {
+		st.SetProxyTelemetryBatch(updates)
+	}
 }
 
 // deriveMappingState inspects system state to infer mapping status.

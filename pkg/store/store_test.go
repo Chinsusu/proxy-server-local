@@ -199,6 +199,33 @@ func testSetProxyTelemetry(t *testing.T, s Store) {
 	t.Fatal("proxy not found")
 }
 
+func testSetProxyTelemetryBatch(t *testing.T, s Store) {
+	p1 := seedProxy(s)
+	p2 := s.CreateProxy(types.Proxy{Label: "test-socks5", Type: "socks5", Host: "5.6.7.8", Port: 1080, Enabled: true})
+
+	updates := []TelemetryUpdate{
+		{ID: p1.ID, Status: types.StatusOK, Latency: 10, ExitIP: "1.1.1.1"},
+		{ID: p2.ID, Status: types.StatusDown, Latency: 0, ExitIP: ""},
+	}
+	s.SetProxyTelemetryBatch(updates)
+
+	for _, pp := range s.ListProxies() {
+		switch pp.ID {
+		case p1.ID:
+			if pp.Status != types.StatusOK {
+				t.Fatalf("p1: expected OK, got %s", pp.Status)
+			}
+			if pp.LatencyMs == nil || *pp.LatencyMs != 10 {
+				t.Fatalf("p1: expected latency 10")
+			}
+		case p2.ID:
+			if pp.Status != types.StatusDown {
+				t.Fatalf("p2: expected DOWN, got %s", pp.Status)
+			}
+		}
+	}
+}
+
 func testListMappings_SortOrder(t *testing.T, s Store) {
 	p := seedProxy(s)
 	c1 := s.CreateClient(types.Client{IPCidr: "192.168.2.20/32", Enabled: true})
@@ -237,6 +264,7 @@ func TestMemoryStore(t *testing.T) {
 		{"UpdateMappingState", testUpdateMappingState},
 		{"DeleteMapping", testDeleteMapping},
 		{"SetProxyTelemetry", testSetProxyTelemetry},
+		{"SetProxyTelemetryBatch", testSetProxyTelemetryBatch},
 		{"ListMappings_SortOrder", testListMappings_SortOrder},
 	}
 	for _, tc := range tests {
@@ -260,6 +288,7 @@ func TestFileStore(t *testing.T) {
 		{"UpdateMappingState", testUpdateMappingState},
 		{"DeleteMapping", testDeleteMapping},
 		{"SetProxyTelemetry", testSetProxyTelemetry},
+		{"SetProxyTelemetryBatch", testSetProxyTelemetryBatch},
 		{"ListMappings_SortOrder", testListMappings_SortOrder},
 	}
 	for _, tc := range tests {

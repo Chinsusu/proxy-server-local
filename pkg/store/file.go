@@ -187,6 +187,19 @@ func (s *fileStore) CreateMapping(m types.Mapping) (types.MappingView, bool) {
 
 func (s *fileStore) SetProxyTelemetry(id string, status types.ProxyStatus, latency int, exitIP string) {
 	s.mu.Lock(); defer s.mu.Unlock()
+	s.applyTelemetry(id, status, latency, exitIP)
+	_ = s.save()
+}
+
+func (s *fileStore) SetProxyTelemetryBatch(updates []TelemetryUpdate) {
+	s.mu.Lock(); defer s.mu.Unlock()
+	for _, u := range updates {
+		s.applyTelemetry(u.ID, u.Status, u.Latency, u.ExitIP)
+	}
+	_ = s.save() // single save for all updates
+}
+
+func (s *fileStore) applyTelemetry(id string, status types.ProxyStatus, latency int, exitIP string) {
 	p, ok := s.state.Proxies[id]; if !ok { return }
 	now := time.Now()
 	p.Status = status
@@ -194,7 +207,6 @@ func (s *fileStore) SetProxyTelemetry(id string, status types.ProxyStatus, laten
 	if exitIP != "" { p.ExitIP = &exitIP } else { p.ExitIP = nil }
 	p.LastCheckedAt = &now
 	s.state.Proxies[id] = p
-	_ = s.save()
 }
 
 // DeleteMapping removes a mapping by id.
