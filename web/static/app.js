@@ -8,21 +8,21 @@ class PGWManager {
     this.loading = false;
     // sorting state (persisted)
     this.pSort = 'address'; this.pAsc = true;
-    this.mSort = 'client';  this.mAsc = true;
+    this.mSort = 'client'; this.mAsc = true;
     try {
-      const sp = JSON.parse(localStorage.getItem('pgw_sort_p2')||'{}');
+      const sp = JSON.parse(localStorage.getItem('pgw_sort_p2') || '{}');
       if (sp && sp.k) { this.pSort = sp.k; this.pAsc = !!sp.a; }
-      const sm = JSON.parse(localStorage.getItem('pgw_sort_m2')||'{}');
+      const sm = JSON.parse(localStorage.getItem('pgw_sort_m2') || '{}');
       if (sm && sm.k) { this.mSort = sm.k; this.mAsc = !!sm.a; }
-    } catch (_) {}
-    
+    } catch (_) { }
+
     this.init();
   }
 
   init() {
     this.bindEvents();
     this.loadData();
-    
+
     // Auto refresh every 30 seconds
     setInterval(() => this.loadData(), 30000);
   }
@@ -90,7 +90,7 @@ class PGWManager {
 
   async loadData() {
     if (this.loading) return;
-    
+
     this.loading = true;
     let _spinnerTO = setTimeout(() => this.showLoading(true), 700);
 
@@ -112,6 +112,7 @@ class PGWManager {
       this.renderClients();
       this.updateCounts();
       this.updateLastRefresh();
+      this.checkServices();
 
     } catch (error) {
       console.error('Failed to load data:', error);
@@ -122,10 +123,64 @@ class PGWManager {
     }
   }
 
+  async checkServices() {
+    // API health
+    const apiEl = document.getElementById('api-status');
+    if (apiEl) {
+      try {
+        const r = await fetch(`${this.apiBase}/v1/health`, { method: 'GET' });
+        if (r.ok) {
+          apiEl.textContent = 'Running';
+          apiEl.className = 'badge text-bg-success';
+        } else {
+          apiEl.textContent = 'Error';
+          apiEl.className = 'badge text-bg-warning';
+        }
+      } catch {
+        apiEl.textContent = 'Down';
+        apiEl.className = 'badge text-bg-danger';
+      }
+    }
+
+    // Agent health
+    const agentEl = document.getElementById('agent-status');
+    if (agentEl) {
+      try {
+        const r = await fetch(`${this.agentBase}/health`, { method: 'HEAD' });
+        if (r.ok) {
+          agentEl.textContent = 'Running';
+          agentEl.className = 'badge text-bg-success';
+        } else {
+          agentEl.textContent = 'Error';
+          agentEl.className = 'badge text-bg-warning';
+        }
+      } catch {
+        agentEl.textContent = 'Down';
+        agentEl.className = 'badge text-bg-danger';
+      }
+    }
+
+    // Forwarder status: inferred from applied mappings
+    const fwdEl = document.getElementById('fwd-status');
+    if (fwdEl) {
+      const applied = (this.mappings || []).filter(m => m.state === 'APPLIED').length;
+      if (applied > 0) {
+        fwdEl.textContent = `${applied} active`;
+        fwdEl.className = 'badge text-bg-success';
+      } else if ((this.mappings || []).length > 0) {
+        fwdEl.textContent = 'Pending';
+        fwdEl.className = 'badge text-bg-warning';
+      } else {
+        fwdEl.textContent = 'No mappings';
+        fwdEl.className = 'badge text-bg-secondary';
+      }
+    }
+  }
+
   renderStats() {
     const okProxies = this.proxies.filter(p => p.status === 'OK').length;
     const activeMappings = this.mappings.filter(m => m.client?.enabled && m.proxy?.enabled).length;
-    
+
     this.updateElement('stat-proxies', this.proxies.length);
     this.updateElement('stat-proxies-ok', okProxies);
     this.updateElement('stat-clients', this.clients.length);
@@ -138,35 +193,35 @@ class PGWManager {
     // sort
     const key = this.pSort, asc = this.pAsc;
     const val = (p) => {
-      if (key==='id') return (p.id||'');
-      if (key==='type') return (p.type||'');
-      if (key==='address') return ((p.host||'')+':'+p.port).toLowerCase();
-      if (key==='status') return (p.status||'');
-      if (key==='latency') return (p.latency_ms==null?Infinity:p.latency_ms);
-      if (key==='exit') return (p.exit_ip||'');
-      if (key==='last') return (p.last_checked_at||'');
-      return ((p.host||'')+':'+p.port).toLowerCase();
+      if (key === 'id') return (p.id || '');
+      if (key === 'type') return (p.type || '');
+      if (key === 'address') return ((p.host || '') + ':' + p.port).toLowerCase();
+      if (key === 'status') return (p.status || '');
+      if (key === 'latency') return (p.latency_ms == null ? Infinity : p.latency_ms);
+      if (key === 'exit') return (p.exit_ip || '');
+      if (key === 'last') return (p.last_checked_at || '');
+      return ((p.host || '') + ':' + p.port).toLowerCase();
     };
-    const sorted = (this.proxies||[]).slice().sort((a,b)=>{ const va=val(a), vb=val(b); if (va<vb) return asc?-1:1; if (va>vb) return asc?1:-1; return 0; });
+    const sorted = (this.proxies || []).slice().sort((a, b) => { const va = val(a), vb = val(b); if (va < vb) return asc ? -1 : 1; if (va > vb) return asc ? 1 : -1; return 0; });
     // header icons + click
     const thead = tbody.parentElement?.querySelector('thead');
     if (thead) {
       const arrow = asc ? ' \\u25B2' : ' \\u25BC';
       thead.innerHTML = '<tr>'
-        + '<th data-k="id" class="sortable">ID'+(key==='id'?arrow:'')+'</th>'
-        + '<th data-k="type" class="sortable">Type'+(key==='type'?arrow:'')+'</th>'
-        + '<th data-k="address" class="sortable">Address'+(key==='address'?arrow:'')+'</th>'
-        + '<th data-k="status" class="sortable">Status'+(key==='status'?arrow:'')+'</th>'
-        + '<th data-k="latency" class="sortable">Latency'+(key==='latency'?arrow:'')+'</th>'
-        + '<th data-k="exit" class="sortable">Exit IP'+(key==='exit'?arrow:'')+'</th>'
-        + '<th data-k="last" class="sortable">Last Check'+(key==='last'?arrow:'')+'</th>'
+        + '<th data-k="id" class="sortable">ID' + (key === 'id' ? arrow : '') + '</th>'
+        + '<th data-k="type" class="sortable">Type' + (key === 'type' ? arrow : '') + '</th>'
+        + '<th data-k="address" class="sortable">Address' + (key === 'address' ? arrow : '') + '</th>'
+        + '<th data-k="status" class="sortable">Status' + (key === 'status' ? arrow : '') + '</th>'
+        + '<th data-k="latency" class="sortable">Latency' + (key === 'latency' ? arrow : '') + '</th>'
+        + '<th data-k="exit" class="sortable">Exit IP' + (key === 'exit' ? arrow : '') + '</th>'
+        + '<th data-k="last" class="sortable">Last Check' + (key === 'last' ? arrow : '') + '</th>'
         + '<th>Actions</th>'
         + '</tr>';
-      thead.querySelectorAll('th.sortable').forEach((th)=>{
-        th.style.cursor='pointer'; th.onclick=()=>{
-          const k=th.getAttribute('data-k');
-          if (this.pSort===k) this.pAsc=!this.pAsc; else { this.pSort=k; this.pAsc=true; }
-          localStorage.setItem('pgw_sort_p2', JSON.stringify({k:this.pSort,a:this.pAsc}));
+      thead.querySelectorAll('th.sortable').forEach((th) => {
+        th.style.cursor = 'pointer'; th.onclick = () => {
+          const k = th.getAttribute('data-k');
+          if (this.pSort === k) this.pAsc = !this.pAsc; else { this.pSort = k; this.pAsc = true; }
+          localStorage.setItem('pgw_sort_p2', JSON.stringify({ k: this.pSort, a: this.pAsc }));
           this.renderProxies();
         };
       });
@@ -200,7 +255,7 @@ class PGWManager {
       const tr = document.createElement('tr');
       const statusBadge = this.createStatusBadge(proxy.status);
       const latencyBadge = this.createLatencyBadge(proxy.latency_ms);
-      const lastChecked = proxy.last_checked_at 
+      const lastChecked = proxy.last_checked_at
         ? new Date(proxy.last_checked_at).toLocaleTimeString()
         : '—';
 
@@ -217,10 +272,10 @@ class PGWManager {
 
   createProxyRow(proxy) {
     const tr = document.createElement('tr');
-    
+
     const statusBadge = this.createStatusBadge(proxy.status);
     const latencyBadge = this.createLatencyBadge(proxy.latency_ms);
-    const lastChecked = proxy.last_checked_at 
+    const lastChecked = proxy.last_checked_at
       ? new Date(proxy.last_checked_at).toLocaleTimeString()
       : '—';
 
@@ -270,31 +325,31 @@ class PGWManager {
     // sort
     const key = this.mSort, asc = this.mAsc;
     const val = (m) => {
-      if (key==='id') return (m.id||'');
-      if (key==='client') return ((m.client?.ip_cidr)||'');
-      if (key==='proxy') { const p=m.proxy||{}; return ((p.host||'')+':'+(p.port??'')); }
-      if (key==='state') return (m.state||'');
-      if (key==='port') return (m.local_redirect_port??0);
-      return ((m.client?.ip_cidr)||'');
+      if (key === 'id') return (m.id || '');
+      if (key === 'client') return ((m.client?.ip_cidr) || '');
+      if (key === 'proxy') { const p = m.proxy || {}; return ((p.host || '') + ':' + (p.port ?? '')); }
+      if (key === 'state') return (m.state || '');
+      if (key === 'port') return (m.local_redirect_port ?? 0);
+      return ((m.client?.ip_cidr) || '');
     };
-    const sorted = (this.mappings||[]).slice().sort((a,b)=>{ const va=val(a), vb=val(b); if (va<vb) return asc?-1:1; if (va>vb) return asc?1:-1; return 0; });
+    const sorted = (this.mappings || []).slice().sort((a, b) => { const va = val(a), vb = val(b); if (va < vb) return asc ? -1 : 1; if (va > vb) return asc ? 1 : -1; return 0; });
     // header icons + click
     const thead = tbody.parentElement?.querySelector('thead');
     if (thead) {
       const arrow = asc ? ' \\u25B2' : ' \\u25BC';
       thead.innerHTML = '<tr>'
-        + '<th data-k="id" class="sortable">ID'+(key==='id'?arrow:'')+'</th>'
-        + '<th data-k="client" class="sortable">Client IP/CIDR'+(key==='client'?arrow:'')+'</th>'
-        + '<th data-k="proxy" class="sortable">Proxy Server'+(key==='proxy'?arrow:'')+'</th>'
-        + '<th data-k="state" class="sortable">State'+(key==='state'?arrow:'')+'</th>'
-        + '<th data-k="port" class="sortable">Local Port'+(key==='port'?arrow:'')+'</th>'
+        + '<th data-k="id" class="sortable">ID' + (key === 'id' ? arrow : '') + '</th>'
+        + '<th data-k="client" class="sortable">Client IP/CIDR' + (key === 'client' ? arrow : '') + '</th>'
+        + '<th data-k="proxy" class="sortable">Proxy Server' + (key === 'proxy' ? arrow : '') + '</th>'
+        + '<th data-k="state" class="sortable">State' + (key === 'state' ? arrow : '') + '</th>'
+        + '<th data-k="port" class="sortable">Local Port' + (key === 'port' ? arrow : '') + '</th>'
         + '<th>Actions</th>'
         + '</tr>';
-      thead.querySelectorAll('th.sortable').forEach((th)=>{
-        th.style.cursor='pointer'; th.onclick=()=>{
-          const k=th.getAttribute('data-k');
-          if (this.mSort===k) this.mAsc=!this.mAsc; else { this.mSort=k; this.mAsc=true; }
-          localStorage.setItem('pgw_sort_m2', JSON.stringify({k:this.mSort,a:this.mAsc}));
+      thead.querySelectorAll('th.sortable').forEach((th) => {
+        th.style.cursor = 'pointer'; th.onclick = () => {
+          const k = th.getAttribute('data-k');
+          if (this.mSort === k) this.mAsc = !this.mAsc; else { this.mSort = k; this.mAsc = true; }
+          localStorage.setItem('pgw_sort_m2', JSON.stringify({ k: this.mSort, a: this.mAsc }));
           this.renderMappings();
         };
       });
@@ -315,11 +370,11 @@ class PGWManager {
 
   createMappingRow(mapping) {
     const tr = document.createElement('tr');
-    
-    const proxyAddress = mapping.proxy 
+
+    const proxyAddress = mapping.proxy
       ? `${mapping.proxy.host}:${mapping.proxy.port}`
       : '—';
-    
+
     const stateBadge = this.createStatusBadge(mapping.state || 'PENDING');
 
     tr.innerHTML = `
@@ -367,11 +422,11 @@ class PGWManager {
     // Check for explicit type prefix
     if (originalLine.includes("socks5://")) return "socks5";
     if (originalLine.includes("http://")) return "http";
-    
+
     // Auto-detect based on common SOCKS5 ports
     const socksCommonPorts = [1080, 9050, 9150];
     if (socksCommonPorts.includes(port)) return "socks5";
-    
+
     // Default to HTTP
     return "http";
   }
@@ -407,13 +462,13 @@ class PGWManager {
         ok++;
         setTimeout(() => this.checkProxyHealth(created.id), 500);
       } catch (e) {
-        console.error("Import failed for line", idx+1, line, e);
+        console.error("Import failed for line", idx + 1, line, e);
         skipped++;
       }
     }
 
-    this.showAlert(`Imported ${ok} proxies${skipped?`, skipped ${skipped}`:""}`, ok>0 ? "success" : "warning");
-    if (ok>0) this.loadData();
+    this.showAlert(`Imported ${ok} proxies${skipped ? `, skipped ${skipped}` : ""}`, ok > 0 ? "success" : "warning");
+    if (ok > 0) this.loadData();
   }
 
 
@@ -444,10 +499,10 @@ class PGWManager {
       this.showAlert('Proxy created successfully', 'success');
       form.reset();
       this.loadData();
-      
+
       // Auto health check the new proxy
       setTimeout(() => this.checkProxyHealth(newProxy.id), 1000);
-      
+
     } catch (error) {
       console.error('Failed to create proxy:', error);
     }
@@ -480,7 +535,7 @@ class PGWManager {
       // First create client if not exists
       let clientId;
       const existingClient = this.clients.find(c => c.ip_cidr === `${clientIP}/32`);
-      
+
       if (existingClient) {
         clientId = existingClient.id;
       } else {
@@ -506,7 +561,7 @@ class PGWManager {
       this.showAlert('Mapping created successfully', 'success');
       form.reset();
       this.loadData();
-      
+
       // Auto reconcile after creating mapping
       setTimeout(() => this.reconcileRules(), 1000);
 
@@ -520,7 +575,7 @@ class PGWManager {
       await this.apiCall(`${this.apiBase}/v1/proxies/${proxyId}/check`, {
         method: 'POST'
       });
-      
+
       this.showAlert('Health check completed', 'success');
       this.loadData();
     } catch (error) {
@@ -535,8 +590,8 @@ class PGWManager {
     }
 
     this.showAlert('Running health checks...', 'info');
-    
-    const checkPromises = this.proxies.map(proxy => 
+
+    const checkPromises = this.proxies.map(proxy =>
       this.checkProxyHealth(proxy.id).catch(e => console.error(`Health check failed for ${proxy.id}:`, e))
     );
 
@@ -577,7 +632,7 @@ class PGWManager {
 
       this.showAlert('Mapping deleted successfully', 'success');
       this.loadData();
-      
+
       // Auto reconcile after deleting mapping
       setTimeout(() => this.reconcileRules(), 1000);
 
@@ -589,7 +644,7 @@ class PGWManager {
   async reconcileRules() {
     try {
       const response = await fetch(`${this.agentBase}/reconcile`);
-      
+
       if (response.ok) {
         this.showAlert('Rules reconciled successfully', 'success');
         this.updateElement('last-reconcile', new Date().toLocaleTimeString());
@@ -657,7 +712,7 @@ class PGWManager {
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
-    
+
     this.showAlert(`${filename} downloaded`, 'success');
   }
 
@@ -668,12 +723,12 @@ class PGWManager {
     // Ensure container is overlay and toast-ready (CSS handles positioning)
     container.classList.add('toast-stack');
 
-    const bsType = ['success','danger','warning','info','primary','secondary'].includes(type) ? type : 'info';
+    const bsType = ['success', 'danger', 'warning', 'info', 'primary', 'secondary'].includes(type) ? type : 'info';
     const toast = document.createElement('div');
     toast.className = `toast align-items-center text-bg-${bsType} border-0`;
-    toast.setAttribute('role','alert');
-    toast.setAttribute('aria-live','assertive');
-    toast.setAttribute('aria-atomic','true');
+    toast.setAttribute('role', 'alert');
+    toast.setAttribute('aria-live', 'assertive');
+    toast.setAttribute('aria-atomic', 'true');
 
     const inner = document.createElement('div');
     inner.className = 'd-flex';
@@ -683,8 +738,8 @@ class PGWManager {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn-close btn-close-white me-2 m-auto';
-    btn.setAttribute('data-bs-dismiss','toast');
-    btn.setAttribute('aria-label','Close');
+    btn.setAttribute('data-bs-dismiss', 'toast');
+    btn.setAttribute('aria-label', 'Close');
 
     inner.appendChild(body);
     inner.appendChild(btn);
@@ -725,7 +780,7 @@ document.addEventListener('DOMContentLoaded', () => {
 document.addEventListener('DOMContentLoaded', () => {
   const currentPath = window.location.pathname;
   const navLinks = document.querySelectorAll('.nav-link');
-  
+
   navLinks.forEach(link => {
     link.classList.remove('active');
     if (link.getAttribute('href') === currentPath) {
