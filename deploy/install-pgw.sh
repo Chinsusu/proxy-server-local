@@ -66,9 +66,9 @@ SUDO
   visudo -cf /etc/sudoers.d/pgw
 }
 
-secr(){ head -c 24 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 48; }
+secr(){ head -c 64 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 48; }
 
-write_env(){ local JWT=$(secr); local AT=$(secr); cat >/etc/pgw/pgw.env <<ENV
+write_env(){ local JWT=$(secr); local AT=$(secr); local AP=$(secr | head -c 16); cat >/etc/pgw/pgw.env <<ENV
 # PGW environment configuration
 # Generated at $(date -Is)
 
@@ -102,11 +102,11 @@ PGW_FWD_IDLE_TIMEOUT=30m
 
 # Admin bootstrap (API login)
 PGW_ADMIN_USER=admin
-# Set PGW_ADMIN_PASS on first run, then replace with hash:
-# PGW_ADMIN_PASS=your-password
+PGW_ADMIN_PASS=$AP
 
 ENV
-chmod 0640 /etc/pgw/pgw.env; }
+chmod 0640 /etc/pgw/pgw.env
+echo ""; echo "========================================"; echo "  Admin credentials:"; echo "  Username: admin"; echo "  Password: $AP"; echo "========================================"; echo ""; }
 
 conf_dns(){ install -d -m 0755 /etc/dnsmasq.d; cat >/etc/dnsmasq.d/pgw.conf <<CONF
 interface=$LAN_IFACE_DEFAULT
