@@ -64,13 +64,23 @@ class PGWManager {
 
   async apiCall(url, options = {}) {
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
       const response = await fetch(url, {
         headers: {
           'Content-Type': 'application/json',
           ...options.headers
         },
+        signal: controller.signal,
         ...options
       });
+      clearTimeout(timeout);
+
+      // Auto-redirect to login on 401 Unauthorized
+      if (response.status === 401) {
+        window.location.href = '/login';
+        return null;
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -82,8 +92,13 @@ class PGWManager {
 
       return await response.json();
     } catch (error) {
-      console.error('API call failed:', error);
-      this.showAlert('API call failed: ' + error.message, 'danger');
+      if (error.name === 'AbortError') {
+        console.error('API call timed out:', url);
+        this.showAlert('API request timed out — is the server running?', 'warning');
+      } else {
+        console.error('API call failed:', error);
+        this.showAlert('API call failed: ' + error.message, 'danger');
+      }
       throw error;
     }
   }
