@@ -313,7 +313,7 @@ const embeddedDashboard = `
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PGW Dashboard</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=1756567003">
+  <link rel="stylesheet" href="/static/styles.css?v=1771067624">
 </head>
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
@@ -421,7 +421,7 @@ const embeddedDashboard = `
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="/static/app.js?v=1756567003"></script>
+  <script src="/static/app.js?v=1771067624"></script>
 </body>
 </html>`
 
@@ -434,7 +434,7 @@ const embeddedManage = `
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PGW Mapping Management</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=1756567003">
+  <link rel="stylesheet" href="/static/styles.css?v=1771067624">
 </head>
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
@@ -508,7 +508,7 @@ const embeddedManage = `
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="/static/app.js?v=1756567003"></script>
+  <script src="/static/app.js?v=1771067624"></script>
 </body>
 </html>`
 
@@ -520,7 +520,7 @@ const embeddedProxies = `
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PGW Proxy Management</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=1756567003">
+  <link rel="stylesheet" href="/static/styles.css?v=1771067624">
 </head>
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
@@ -618,7 +618,7 @@ const embeddedProxies = `
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="/static/app.js?v=1756567003"></script>
+  <script src="/static/app.js?v=1771067624"></script>
 </body>
 </html>`
 
