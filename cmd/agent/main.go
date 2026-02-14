@@ -81,6 +81,12 @@ func main() {
 		}
 	})
 
+	http.HandleFunc("/agent/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			w.Write([]byte("ok"))
+		}
+	})
 
 	// tick định kỳ
 	go func() {
