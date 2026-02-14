@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0] - 2026-02-14
+
+### Added
+- **Dark Mode OLED UI theme** — Complete UI redesign using AI-generated design system (UI/UX Pro Max skill). Deep black OLED backgrounds (#020617), green CTAs (#22C55E), Fira Code/Sans typography, WCAG AAA accessibility. Cache-busting version bump to `v=1771068456`.
+
+### Fixed
+- **UI server template caching bug** — Removed stale file-based templates in `/usr/local/share/pgw/web/` that overrode embedded templates in binary, causing old UI to persist despite code updates.
+
 ## [1.2.0] - 2026-02-14
 
 ### Fixed
