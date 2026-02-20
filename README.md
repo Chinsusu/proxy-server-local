@@ -81,7 +81,7 @@ Mặc định địa chỉ:
 ```bash
 API=http://127.0.0.1:8080
 
-# Proxy
+# Proxy (type: "http" hoặc "socks5")
 curl -s -H 'Content-Type: application/json' -d '{
   "type":"http","host":"ipv4-vt-01.resvn.net","port":24639,
   "username":"USER","password":"PASS","enabled":true
@@ -121,7 +121,7 @@ Danh sách endpoint chi tiết: xem `docs/api.md`.
 ## Giới hạn hiện tại
 
 * **Chỉ hỗ trợ client IP /32** (theo Phương án A).
-* Upstream proxy loại `http`; SOCKS/HTTPS sẽ thêm sau.
+* Upstream proxy hỗ trợ loại `http` và `socks5`.
 * `memory store` mất dữ liệu khi restart (dùng `file` để lưu bền).
 
 ---

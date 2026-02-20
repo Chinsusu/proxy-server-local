@@ -54,21 +54,24 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-`/etc/systemd/system/pgw-fwd.service`
+`/etc/systemd/system/pgw-fwd@.service` (template — khuyến nghị)
 
 ```ini
 [Unit]
-Description=PGW Forwarder
+Description=PGW Forwarder instance on port %i
 After=network.target
 
 [Service]
-Environment=PGW_FWD_ADDR=:15001
+Environment=PGW_FWD_ADDR=192.168.2.1:%i
+Environment=PGW_API_BASE=http://127.0.0.1:8080
 ExecStart=/usr/local/bin/pgw-fwd
 Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+> **Lưu ý quan trọng**: Bind forwarder vào **LAN IP** (`192.168.2.1:%i`), KHÔNG dùng `:%i` (all interfaces). Nếu bind all interfaces, traffic từ forwarder ra upstream sẽ bị nftables redirect ngược lại gây routing loop.
 
 `/etc/systemd/system/pgw-ui.service`
 
@@ -88,12 +91,30 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
+`/etc/systemd/system/pgw-webhook.service`
+
+```ini
+[Unit]
+Description=PGW Webhook (GitHub auto-deploy)
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/pgw/pgw.env
+ExecStart=/usr/local/bin/pgw-webhook
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
 Kích hoạt:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now pgw-api pgw-agent pgw-fwd pgw-ui
+sudo systemctl enable --now pgw-api pgw-agent pgw-fwd@15001 pgw-ui pgw-webhook
 ```
+
+> `pgw-webhook` yêu cầu `PGW_WEBHOOK_SECRET` được set trong `/etc/pgw/pgw.env`. Xem `docs/webhook-setup.md` để biết cách lấy secret và cấu hình GitHub.
 
 ## Kiểm tra nhanh
 

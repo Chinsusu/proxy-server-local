@@ -24,7 +24,7 @@ Ubuntu 22.04 – run:
 - PGW_WAN_IFACE=eth0
 - PGW_LAN_IFACE=ens19
 - PGW_FORWARDER_BASE_PORT=15001
-- PGW_FWD_MAX_PORT=15100
+- PGW_FWD_MAX_PORT=15999
 - (Important) PGW_AGENT_TOKEN=... (random)
 
 3) Build & install
