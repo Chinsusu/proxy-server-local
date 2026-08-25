@@ -118,7 +118,12 @@ trap cleanup EXIT
 install -d -m 0700 "${artifact_root}"
 for command_name in api agent fwd ui health snapshot-crypt; do
     artifact="${artifact_root}/pgw-${command_name}"
-    (cd -- "${ROOT}" && CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "${artifact}" "./cmd/${command_name}")
+    # -modcacherw: callers with a private, single-use HOME (e.g.
+    # rehearse-release.sh's sandboxed rehearsal) get a GOMODCACHE under that
+    # HOME; Go's default read-only module cache files then make the
+    # caller's own cleanup rm -rf fail. Same fix as build-release.sh's
+    # run_go(), for the same reason.
+    (cd -- "${ROOT}" && CGO_ENABLED=0 GOFLAGS=-modcacherw go build -trimpath -buildvcs=false -o "${artifact}" "./cmd/${command_name}")
     chmod 0555 "${artifact}"
 done
 
