@@ -16,7 +16,7 @@ export PATH
     printf 'usage: rehearse-release.sh ASSEMBLY OUTPUT_EVIDENCE_DIRECTORY\n' >&2
     exit 2
 }
-readonly REQUIRED_TOOLS=(awk cp dirname env find install mktemp readlink rm setpriv sha256sum stat tee tr unshare)
+readonly REQUIRED_TOOLS=(awk cp dirname env find install mktemp readlink rm setpriv sha256sum stat tee tr)
 for required_tool in "${REQUIRED_TOOLS[@]}"; do
     command -v "${required_tool}" >/dev/null 2>&1 || {
         printf 'missing nonroot rehearsal tool: %s\n' "${required_tool}" >&2
@@ -125,16 +125,19 @@ printf 'transaction_model=nonroot_fixture production_gate=FAIL full_system_authe
 printf 'harness_provenance=release_manifest snapshot=descriptor_first\n'
 
 set +e
-# Dropping the capability bounding set requires CAP_SETPCAP, which this
-# already-unprivileged caller (line 11 rejects EUID 0) does not hold on the
-# host. The creator of a new user namespace is granted full capabilities
-# relative to that namespace regardless of its uid mapping, so map this
-# uid to itself (not to 0, unlike release_launcher_root_test.sh's use of
-# the same unshare technique) - installer_transaction_test.sh's own
-# installer_harness.sh calls reject EUID 0, and this must still look and
-# behave like the non-root caller it actually is.
-unshare --user --map-user="${EUID}" --map-group="$(id -g)" --fork \
-    setpriv --no-new-privs --inh-caps=-all --ambient-caps=-all --bounding-set=-all \
+# --bounding-set=-all requires CAP_SETPCAP, which this already-unprivileged
+# caller (line 11 rejects EUID 0) does not hold. Gaining it via a user
+# namespace would need setpriv to then drop back from namespace-root to
+# this caller's real uid so installer_harness.sh's own EUID-0 rejection
+# still holds downstream - but that uid isn't a valid mapped id inside a
+# --map-root-user namespace (its uid_map has exactly one entry: 0 <-> our
+# real uid), so setpriv's own reuid there fails too. Unlike
+# nonroot_crash_evidence_runner.sh (dropping from real root, where this
+# is a full capability-zero proof), this rehearsal's own bounding set
+# starts empty as a normal unprivileged process; clearing the inheritable
+# and ambient sets (which don't need CAP_SETPCAP) already prevents any of
+# it from surviving into the child regardless.
+setpriv --no-new-privs --inh-caps=-all --ambient-caps=-all \
     env -i PATH="${SAFE_PATH}" LANG=C LC_ALL=C HOME="${work}" TMPDIR="${work}" \
     PGW_TRANSACTION_SECTION=all PGW_TRANSACTION_EVIDENCE_DIR="${stage}" \
     PGW_TRANSACTION_TEMP_PARENT="${work}" \
