@@ -239,6 +239,242 @@ assert_fake_sysctl_contract() {
     # node requires privilege and is unavailable in this non-root contract.
 }
 
+reset_fake_nft_contract_state() {
+    local fixture="$1" command="$2"
+    PGW_FAKE_ROOT="${fixture}" "${command}" stop nftables.service
+    printf '0\n' >"${fixture}/runtime/ip-forward"
+    printf 'table inet pgw_base { chain contract_baseline { } }\n' >"${fixture}/runtime/ruleset.nft"
+    chmod 0644 "${fixture}/runtime/ruleset.nft"
+    [[ "$(awk -F '\t' '$1=="nftables.service" {print $3}' "${fixture}/runtime/services")" == inactive &&
+       "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 0 ]]
+}
+
+install_valid_nft_contract_files() {
+    local fixture="$1" main base
+    main="${fixture}/system/etc/nftables.conf"
+    base="${fixture}/system/etc/nftables.d/pgw-base.nft"
+    rm -f -- "${main}" "${base}"
+    /usr/bin/install -m 0644 -- "${ROOT}/deploy/nftables.conf" "${main}"
+    printf 'table inet pgw_base { chain forward { type filter hook forward priority filter; policy drop; } }\n' \
+        >"${base}"
+    chmod 0644 "${base}"
+}
+
+assert_fake_nft_rejected() {
+    local fixture="$1" command="$2" label="$3" external_main_digest="$4" external_base_digest="$5"
+    local operation="${6:-restart}" timeout_seconds="${7:-}" rc runtime_digest
+    [[ "${operation}" == start || "${operation}" == restart ]] \
+        || { printf 'invalid fake nftables test operation\n' >&2; exit 1; }
+    reset_fake_nft_contract_state "${fixture}" "${command}"
+    runtime_digest="$(/usr/bin/sha256sum -- "${fixture}/runtime/ruleset.nft" | awk '{print $1}')"
+    set +e
+    if [[ -n "${timeout_seconds}" ]]; then
+        PGW_FAKE_ROOT="${fixture}" /usr/bin/timeout --signal=TERM --kill-after=1s \
+            "${timeout_seconds}s" "${command}" "${operation}" nftables.service >/dev/null 2>&1
+    else
+        PGW_FAKE_ROOT="${fixture}" "${command}" "${operation}" nftables.service >/dev/null 2>&1
+    fi
+    rc=$?
+    set -e
+    [[ "${rc}" == 2 ]] \
+        || { printf '%s nftables rejection returned rc=%s, expected rc=2\n' "${label}" "${rc}" >&2; exit 1; }
+    [[ "$(awk -F '\t' '$1=="nftables.service" {print $3}' "${fixture}/runtime/services")" == inactive &&
+       "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 0 ]] \
+        || { printf '%s nftables rejection changed service/forwarding state\n' "${label}" >&2; exit 1; }
+    [[ "$(/usr/bin/sha256sum -- "${fixture}/runtime/ruleset.nft" | awk '{print $1}')" == "${runtime_digest}" ]] \
+        || { printf '%s nftables rejection changed runtime ruleset\n' "${label}" >&2; exit 1; }
+    [[ "$(/usr/bin/sha256sum -- "${fixture}/outside-nft-main" | awk '{print $1}')" == "${external_main_digest}" &&
+       "$(/usr/bin/sha256sum -- "${fixture}/outside-nft-base" | awk '{print $1}')" == "${external_base_digest}" ]] \
+        || { printf '%s nftables rejection changed external sentinel\n' "${label}" >&2; exit 1; }
+}
+
+assert_fake_nft_contract() {
+    local fixture="${temp_root}/fake-nft-contract" systemctl_command nft_command lifecycle_command
+    local main base runtime inline expected external_main external_base external_main_digest external_base_digest before_digest
+    local prior_base_digest prior_runtime_digest rc
+    make_fixture "${fixture}" inactive
+    systemctl_command="${fixture}/fake-bin/systemctl"
+    nft_command="${fixture}/fake-bin/nft"
+    lifecycle_command="${fixture}/fake-bin/lifecycle"
+    main="${fixture}/system/etc/nftables.conf"
+    base="${fixture}/system/etc/nftables.d/pgw-base.nft"
+    runtime="${fixture}/runtime/ruleset.nft"
+    external_main="${fixture}/outside-nft-main"
+    external_base="${fixture}/outside-nft-base"
+    /usr/bin/install -m 0644 -- "${ROOT}/deploy/nftables.conf" "${external_main}"
+    printf '# external nft main sentinel\n' >>"${external_main}"
+    printf 'table inet pgw_base { chain forward { type filter hook forward priority filter; policy drop; } }\n' \
+        >"${external_base}"
+    chmod 0644 "${external_base}"
+    external_main_digest="$(/usr/bin/sha256sum -- "${external_main}" | awk '{print $1}')"
+    external_base_digest="$(/usr/bin/sha256sum -- "${external_base}" | awk '{print $1}')"
+    [[ "${external_main_digest}" =~ ^[0-9a-f]{64}$ && "${external_base_digest}" =~ ^[0-9a-f]{64}$ ]]
+
+    printf 'prior persisted base\n' >"${base}"
+    printf 'prior runtime ruleset\n' >"${runtime}"
+    chmod 0644 "${base}" "${runtime}"
+    prior_base_digest="$(/usr/bin/sha256sum -- "${base}" | awk '{print $1}')"
+    prior_runtime_digest="$(/usr/bin/sha256sum -- "${runtime}" | awk '{print $1}')"
+    set +e
+    PGW_FAKE_NFT_INSTALL_FAIL_AT=after_base PGW_FAKE_ROOT="${fixture}" \
+        "${lifecycle_command}" install-base >/dev/null 2>&1
+    rc=$?
+    set -e
+    [[ "${rc}" == 2 ]] || { printf 'fake install-base injection returned %s, expected 2\n' "${rc}" >&2; exit 1; }
+    [[ "$(/usr/bin/sha256sum -- "${base}" | awk '{print $1}')" == "${prior_base_digest}" &&
+       "$(/usr/bin/sha256sum -- "${runtime}" | awk '{print $1}')" == "${prior_runtime_digest}" ]] \
+        || { printf 'fake install-base failure did not restore prior pair\n' >&2; exit 1; }
+    if find "${fixture}/system/etc/nftables.d" "${fixture}/runtime" -maxdepth 1 \
+        \( -name '.pgw-base.candidate.*' -o -name '.pgw-base.*.new.*' -o -name '.pgw-base.*.backup.*' \
+           -o -name '.ruleset.nft.new.*' -o -name '.ruleset.nft.backup.*' \) -print -quit | grep -q .; then
+        printf 'fake install-base failure left publication residue\n' >&2
+        exit 1
+    fi
+
+    rm -f -- "${base}"
+    prior_runtime_digest="$(/usr/bin/sha256sum -- "${runtime}" | awk '{print $1}')"
+    set +e
+    PGW_FAKE_NFT_INSTALL_FAIL_AT=after_base PGW_FAKE_ROOT="${fixture}" \
+        "${lifecycle_command}" install-base >/dev/null 2>&1
+    rc=$?
+    set -e
+    [[ "${rc}" == 2 && ! -e "${base}" && ! -L "${base}" &&
+       "$(/usr/bin/sha256sum -- "${runtime}" | awk '{print $1}')" == "${prior_runtime_digest}" ]] \
+        || { printf 'fake install-base failure did not remove newly published base\n' >&2; exit 1; }
+
+    PGW_FAKE_ROOT="${fixture}" "${lifecycle_command}" install-base
+    [[ "$(/usr/bin/stat -c '%u:%a:%F:%h' -- "${base}")" == "${EUID}:644:regular file:1" &&
+       "$(/usr/bin/stat -c '%u:%a:%F:%h' -- "${runtime}")" == "${EUID}:644:regular file:1" ]] \
+        || { printf 'fake install-base published unsafe fixture files\n' >&2; exit 1; }
+    cmp -s "${base}" "${runtime}" || { printf 'fake install-base base/runtime differ\n' >&2; exit 1; }
+    /usr/bin/install -m 0644 -- "${ROOT}/deploy/nftables.conf" "${main}"
+
+    reset_fake_nft_contract_state "${fixture}" "${systemctl_command}"
+    before_digest="$(/usr/bin/sha256sum -- "${runtime}" | awk '{print $1}')"
+    PGW_FAKE_ROOT="${fixture}" "${nft_command}" -c -f "${main}"
+    [[ "$(/usr/bin/sha256sum -- "${runtime}" | awk '{print $1}')" == "${before_digest}" ]] \
+        || { printf 'fake nft syntax check mutated runtime\n' >&2; exit 1; }
+    PGW_FAKE_ROOT="${fixture}" "${systemctl_command}" restart nftables.service
+    [[ "$(awk -F '\t' '$1=="nftables.service" {print $3}' "${fixture}/runtime/services")" == active ]] \
+        || { printf 'fake nftables restart did not activate service\n' >&2; exit 1; }
+    cmp -s "${base}" "${runtime}" || { printf 'fake nftables restart did not expand persisted base\n' >&2; exit 1; }
+
+    rm -f -- "${main}" "${base}"
+    before_digest="$(/usr/bin/sha256sum -- "${runtime}" | awk '{print $1}')"
+    PGW_FAKE_ROOT="${fixture}" "${systemctl_command}" start nftables.service
+    [[ "$(awk -F '\t' '$1=="nftables.service" {print $3}' "${fixture}/runtime/services")" == active &&
+       "$(/usr/bin/sha256sum -- "${runtime}" | awk '{print $1}')" == "${before_digest}" &&
+       "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 0 ]] \
+        || { printf 'active fake nftables start was not a no-op\n' >&2; exit 1; }
+
+    inline="${fixture}/backups/inline-restore.nft"
+    expected="${fixture}/backups/inline-expected.nft"
+    printf 'flush ruleset\ntable inet pgw_base { chain restored { } }\n' >"${inline}"
+    printf 'table inet pgw_base { chain restored { } }\n' >"${expected}"
+    reset_fake_nft_contract_state "${fixture}" "${systemctl_command}"
+    before_digest="$(/usr/bin/sha256sum -- "${runtime}" | awk '{print $1}')"
+    PGW_FAKE_ROOT="${fixture}" "${nft_command}" -c -f "${inline}"
+    [[ "$(/usr/bin/sha256sum -- "${runtime}" | awk '{print $1}')" == "${before_digest}" ]] \
+        || { printf 'inline restore syntax check mutated runtime\n' >&2; exit 1; }
+    PGW_FAKE_ROOT="${fixture}" "${nft_command}" -f "${inline}"
+    cmp -s "${expected}" "${runtime}" || { printf 'inline restore ruleset was not applied\n' >&2; exit 1; }
+
+    install_valid_nft_contract_files "${fixture}"
+    rm -f -- "${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" missing-main "${external_main_digest}" "${external_base_digest}" start
+
+    install_valid_nft_contract_files "${fixture}"
+    printf 'include "/etc/nftables.d/pgw-base.nft"\n' >"${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" malformed-main "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'flush ruleset\ninclude "/etc/nftables.d/pgw-base.nft"\ninclude "/etc/nftables.d/pgw-base.nft"\n' >"${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" duplicate-include "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'flush ruleset\ninclude "/etc/nftables.d/*.nft"\n' >"${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" glob-include "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'flush ruleset\ninclude "/etc/nftables.d/nested/pgw-base.nft"\n' >"${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" nested-include "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'flush ruleset\ninclude "/etc/nftables.d/pgw\\x2dbase.nft"\n' >"${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" escaped-include "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'flush ruleset\nadd table inet extra\ninclude "/etc/nftables.d/pgw-base.nft"\n' >"${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" unexpected-main "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'flush ruleset\r\ninclude "/etc/nftables.d/pgw-base.nft"\r\n' >"${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" carriage-return-main "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'flush\xC2\xA0ruleset\ninclude "/etc/nftables.d/pgw-base.nft"\n' >"${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" unicode-whitespace-main "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'flush ruleset\xE2\x80\xA8include "/etc/nftables.d/pgw-base.nft"\n' >"${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" unicode-separator-main "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'flush \xFFruleset\ninclude "/etc/nftables.d/pgw-base.nft"\n' >"${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" malformed-utf8-main "${external_main_digest}" "${external_base_digest}"
+
+    install_valid_nft_contract_files "${fixture}"
+    chmod 0664 "${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" group-writable-main "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    rm -f -- "${main}"; ln "${external_main}" "${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" hardlink-main "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    rm -f -- "${main}"; ln -s "${external_main}" "${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" symlink-main "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    rm -f -- "${main}"; mkfifo "${main}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" fifo-main "${external_main_digest}" "${external_base_digest}" restart 3
+
+    install_valid_nft_contract_files "${fixture}"
+    rm -f -- "${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" missing-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'table inet other { }\n' >"${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" malformed-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'table inet pgw_base { }\n' >"${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" empty-pgw-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'table inet pgw_base { chain forward { type filter hook forward priority filter; policy accept; } }\n' >"${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" policy-accept-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'table inet pgw_base { chain forward { type filter hook forward priority filter; policy drop; }\n' >"${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" unclosed-marker-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'delete table inet pgw_base\ntable inet pgw_base { chain forward { type filter hook forward priority filter; policy drop; } }\n' >"${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" delete-command-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'add table inet pgw_base\n' >"${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" add-command-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'table inet pgw_base { chain forward { type filter hook forward priority filter; policy drop; } }\ntable inet extra { }\n' >"${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" extra-table-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'table inet pgw_base { chain forward { type filter hook forward priority filter; policy drop; } }\nbogus trailing command\n' >"${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" trailing-command-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'flush ruleset\ntable inet pgw_base { }\n' >"${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" base-flush "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    printf 'table inet pgw_base { }\ninclude "/etc/nftables.d/extra.nft"\n' >"${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" base-include "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    chmod 0664 "${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" group-writable-base "${external_main_digest}" "${external_base_digest}" start
+    install_valid_nft_contract_files "${fixture}"
+    rm -f -- "${base}"; ln "${external_base}" "${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" hardlink-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    rm -f -- "${base}"; ln -s "${external_base}" "${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" symlink-base "${external_main_digest}" "${external_base_digest}"
+    install_valid_nft_contract_files "${fixture}"
+    rm -f -- "${base}"; mkfifo "${base}"
+    assert_fake_nft_rejected "${fixture}" "${systemctl_command}" fifo-base "${external_main_digest}" "${external_base_digest}" restart 3
+    rm -f -- "${main}" "${base}"
+}
+
 assert_restore_authority_contract() {
     local fixture="${temp_root}/restore-authority-contract" command web static external rc
     make_fixture "${fixture}" inactive
@@ -639,6 +875,8 @@ PY
 
 index=0
 if [[ "${section}" == all || "${section}" == success ]]; then
+    printf 'nftables include-aware fixture fidelity\n'
+    assert_fake_nft_contract
     printf 'systemd-sysctl absent/present fixture fidelity\n'
     assert_fake_sysctl_contract
     printf 'test-only root restore-authority admission\n'

@@ -14,6 +14,211 @@ update_field() {
     mv -f -- "${temporary}" "${state}"
 }
 
+render_nft_boot_ruleset() {
+    /usr/bin/python3 -I - "${root}" <<'PY'
+import os
+import stat
+import sys
+
+MAX_MAIN = 65536
+MAX_BASE = 1048576
+CANONICAL_BASE = b"table inet pgw_base { chain forward { type filter hook forward priority filter; policy drop; } }\n"
+
+
+def safe_directory(parent, name, expected_uid):
+    descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    info = os.fstat(descriptor)
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != expected_uid
+            or stat.S_IMODE(info.st_mode) & 0o022):
+        os.close(descriptor)
+        raise ValueError("unsafe directory")
+    return descriptor
+
+
+def identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def safe_file(parent, name, expected_uid, limit):
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        dir_fd=parent,
+    )
+    try:
+        before = os.fstat(descriptor)
+        bound_before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != expected_uid
+                or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) & 0o022
+                or (bound_before.st_dev, bound_before.st_ino) != (before.st_dev, before.st_ino)
+                or before.st_size > limit):
+            raise ValueError("unsafe file")
+        chunks = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 65536))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        after = os.fstat(descriptor)
+        bound_after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (len(payload) > limit or identity(after) != identity(before)
+                or (bound_after.st_dev, bound_after.st_ino) != (after.st_dev, after.st_ino)):
+            raise ValueError("file changed")
+        return payload
+    finally:
+        os.close(descriptor)
+
+
+fixture = sys.argv[1]
+descriptors = []
+try:
+    if not os.path.isabs(fixture) or os.path.normpath(fixture) != fixture:
+        raise ValueError("unsafe fixture")
+    expected = os.geteuid()
+    root_fd = os.open(fixture, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    descriptors.append(root_fd)
+    root_info = os.fstat(root_fd)
+    if (not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != expected
+            or stat.S_IMODE(root_info.st_mode) & 0o022):
+        raise ValueError("unsafe fixture")
+    system_fd = safe_directory(root_fd, "system", expected)
+    descriptors.append(system_fd)
+    etc_fd = safe_directory(system_fd, "etc", expected)
+    descriptors.append(etc_fd)
+    nft_dir_fd = safe_directory(etc_fd, "nftables.d", expected)
+    descriptors.append(nft_dir_fd)
+
+    main = safe_file(etc_fd, "nftables.conf", expected, MAX_MAIN)
+    base = safe_file(nft_dir_fd, "pgw-base.nft", expected, MAX_BASE)
+
+    executable = []
+    if any(byte not in (9, 10) and not 32 <= byte <= 126 for byte in main):
+        raise ValueError("invalid main nftables bytes")
+    for line in main.split(b"\n"):
+        stripped = line.strip(b" \t")
+        if not stripped or stripped.startswith(b"#"):
+            continue
+        executable.append(stripped)
+    if executable != [b"flush ruleset", b'include "/etc/nftables.d/pgw-base.nft"']:
+        raise ValueError("invalid main nftables config")
+
+    if base != CANONICAL_BASE:
+        raise ValueError("invalid persisted base")
+    sys.stdout.buffer.write(base)
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit(2)
+finally:
+    for descriptor in reversed(descriptors):
+        os.close(descriptor)
+PY
+}
+
+publish_nft_boot_ruleset() {
+    local temporary
+    temporary="$(/usr/bin/mktemp "${root}/runtime/.ruleset.nft.new.XXXXXXXX")" || return 2
+    if ! render_nft_boot_ruleset >"${temporary}"; then
+        rm -f -- "${temporary}"
+        return 2
+    fi
+    /usr/bin/chmod 0644 "${temporary}" || { rm -f -- "${temporary}"; return 2; }
+    /usr/bin/mv -f -- "${temporary}" "${root}/runtime/ruleset.nft" || {
+        rm -f -- "${temporary}"
+        return 2
+    }
+}
+
+publish_fake_base() {
+    local candidate base_stage runtime_stage base_target runtime_target base_backup="" runtime_backup=""
+    local target uid mode links rc=0 rollback_rc=0 base_had=0 runtime_had=0 base_published=0 runtime_published=0
+    case "${PGW_FAKE_NFT_INSTALL_FAIL_AT:-}" in
+        ''|after_base) ;;
+        *) return 2 ;;
+    esac
+    base_target="${root}/system/etc/nftables.d/pgw-base.nft"
+    runtime_target="${root}/runtime/ruleset.nft"
+    candidate="$(/usr/bin/mktemp "${root}/runtime/.pgw-base.candidate.XXXXXXXX")" || return 2
+    base_stage="$(/usr/bin/mktemp "${root}/system/etc/nftables.d/.pgw-base.nft.new.XXXXXXXX")" \
+        || { /usr/bin/rm -f -- "${candidate}"; return 2; }
+    runtime_stage="$(/usr/bin/mktemp "${root}/runtime/.ruleset.nft.new.XXXXXXXX")" \
+        || { /usr/bin/rm -f -- "${candidate}" "${base_stage}"; return 2; }
+    printf 'table inet pgw_base { chain forward { type filter hook forward priority filter; policy drop; } }\n' \
+        >"${candidate}"
+    if ! /usr/bin/install -m 0644 -- "${candidate}" "${base_stage}" ||
+       ! /usr/bin/install -m 0644 -- "${candidate}" "${runtime_stage}" ||
+       [[ "$(/usr/bin/stat -c '%u:%a:%F:%h' -- "${base_stage}")" != "${EUID}:644:regular file:1" ]] ||
+       [[ "$(/usr/bin/stat -c '%u:%a:%F:%h' -- "${runtime_stage}")" != "${EUID}:644:regular file:1" ]] ||
+       ! /usr/bin/cmp -s -- "${base_stage}" "${runtime_stage}"; then
+        /usr/bin/rm -f -- "${candidate}" "${base_stage}" "${runtime_stage}"
+        return 2
+    fi
+    /usr/bin/rm -f -- "${candidate}"
+
+    for target in "${base_target}" "${runtime_target}"; do
+        if [[ -e "${target}" || -L "${target}" ]]; then
+            [[ -f "${target}" && ! -L "${target}" ]] || { rc=2; break; }
+            uid="$(/usr/bin/stat -c '%u' -- "${target}")"
+            mode="$(/usr/bin/stat -c '%a' -- "${target}")"
+            links="$(/usr/bin/stat -c '%h' -- "${target}")"
+            [[ "${uid}" == "${EUID}" && "${links}" == 1 && $((8#${mode} & 8#022)) == 0 ]] \
+                || { rc=2; break; }
+        fi
+    done
+
+    if ((rc == 0)) && [[ -e "${base_target}" ]]; then
+        base_backup="$(/usr/bin/mktemp "${root}/system/etc/nftables.d/.pgw-base.nft.backup.XXXXXXXX")" || rc=2
+        if ((rc == 0)); then
+            /usr/bin/rm -f -- "${base_backup}"
+            /usr/bin/mv -T -- "${base_target}" "${base_backup}" && base_had=1 || rc=2
+        fi
+    fi
+    if ((rc == 0)) && [[ -e "${runtime_target}" ]]; then
+        runtime_backup="$(/usr/bin/mktemp "${root}/runtime/.ruleset.nft.backup.XXXXXXXX")" || rc=2
+        if ((rc == 0)); then
+            /usr/bin/rm -f -- "${runtime_backup}"
+            /usr/bin/mv -T -- "${runtime_target}" "${runtime_backup}" && runtime_had=1 || rc=2
+        fi
+    fi
+    if ((rc == 0)); then
+        /usr/bin/mv -T -- "${base_stage}" "${base_target}" && { base_stage=""; base_published=1; } || rc=2
+    fi
+    if ((rc == 0)) && [[ "${PGW_FAKE_NFT_INSTALL_FAIL_AT:-}" == after_base ]]; then
+        rc=2
+    fi
+    if ((rc == 0)); then
+        /usr/bin/mv -T -- "${runtime_stage}" "${runtime_target}" && { runtime_stage=""; runtime_published=1; } || rc=2
+    fi
+    if ((rc == 0)); then
+        [[ -z "${base_backup}" ]] || /usr/bin/rm -f -- "${base_backup}"
+        [[ -z "${runtime_backup}" ]] || /usr/bin/rm -f -- "${runtime_backup}"
+        return 0
+    fi
+
+    if ((runtime_published)); then
+        /usr/bin/rm -f -- "${runtime_target}" || rollback_rc=1
+    fi
+    if ((runtime_had)); then
+        /usr/bin/mv -T -- "${runtime_backup}" "${runtime_target}" || rollback_rc=1
+        runtime_backup=""
+    fi
+    if ((base_published)); then
+        /usr/bin/rm -f -- "${base_target}" || rollback_rc=1
+    fi
+    if ((base_had)); then
+        /usr/bin/mv -T -- "${base_backup}" "${base_target}" || rollback_rc=1
+        base_backup=""
+    fi
+    [[ -z "${base_stage}" ]] || /usr/bin/rm -f -- "${base_stage}"
+    [[ -z "${runtime_stage}" ]] || /usr/bin/rm -f -- "${runtime_stage}"
+    [[ -z "${base_backup}" ]] || /usr/bin/rm -f -- "${base_backup}"
+    [[ -z "${runtime_backup}" ]] || /usr/bin/rm -f -- "${runtime_backup}"
+    ((rollback_rc == 0)) || return 98
+    return 2
+}
+
 fake_systemctl() {
     local operation="${1:-}" runtime=0 quiet=0 unit value config config_uid config_mode config_links config_value
     shift || true
@@ -46,9 +251,10 @@ fake_systemctl() {
         start|restart)
             for unit in "$@"; do
                 if [[ "${unit}" == nftables.service ]]; then
-                    config="${root}/system/etc/nftables.conf"
-                    [[ -f "${config}" ]] || return 2
-                    sed '1{/^flush ruleset$/d;}' "${config}" >"${root}/runtime/ruleset.nft"
+                    if [[ "${operation}" == start && "$(field "${unit}" 3)" == active ]]; then
+                        continue
+                    fi
+                    publish_nft_boot_ruleset || return 2
                 elif [[ "${unit}" == systemd-sysctl.service ]]; then
                     config="${root}/system/etc/sysctl.d/99-pgw.conf"
                     [[ ! -L "${config}" ]] || return 2
@@ -112,9 +318,18 @@ fake_nft() {
     if [[ "$*" == '-s list ruleset' ]]; then
         cat "${root}/runtime/ruleset.nft"
     elif [[ "${1:-}" == -c && "${2:-}" == -f ]]; then
-        grep -q '^flush ruleset$' "$3"
+        if [[ "$3" == "${root}/system/etc/nftables.conf" ]]; then
+            render_nft_boot_ruleset >/dev/null || return 2
+        else
+            grep -q '^flush ruleset$' "$3" && grep -q 'table inet pgw_base' "$3" || return 2
+        fi
     elif [[ "${1:-}" == -f ]]; then
-        sed '1{/^flush ruleset$/d;}' "$2" >"${root}/runtime/ruleset.nft"
+        if [[ "$2" == "${root}/system/etc/nftables.conf" ]]; then
+            publish_nft_boot_ruleset || return 2
+        else
+            grep -q '^flush ruleset$' "$2" && grep -q 'table inet pgw_base' "$2" || return 2
+            sed '1{/^flush ruleset$/d;}' "$2" >"${root}/runtime/ruleset.nft"
+        fi
     else
         return 2
     fi
@@ -411,8 +626,7 @@ case "$(basename -- "$0")" in
             mutate) mutate_fixture "${4}" ;;
             restore-authority) grant_restore_authority "${2:-}" ;;
             install-base)
-                printf 'table inet pgw_base { chain forward { type filter hook forward priority filter; policy drop; } }\n' \
-                    >"${root}/runtime/ruleset.nft"
+                publish_fake_base
                 printf '0\n' >"${root}/runtime/ip-forward"
                 ;;
             verify-base)
