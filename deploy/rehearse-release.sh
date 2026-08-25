@@ -91,7 +91,7 @@ release_id="$(awk -F '\t' '$1=="release_id" {print $2}' "${stage}/assembly-verif
 release_manifest_sha256="$(awk -F '\t' '$1=="release_manifest_sha256" {print $2}' "${stage}/assembly-verification.tsv")"
 [[ "${release_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ &&
    "${release_manifest_sha256}" =~ ^[0-9a-f]{64}$ &&
-   "$(grep -c $'^binary\t' "${stage}/assembly-verification.tsv")" == 6 ]] || {
+   "$(grep -c $'^binary\t' "${stage}/assembly-verification.tsv")" == 7 ]] || {
     printf 'strict assembly verification report is incomplete\n' >&2
     exit 65
 }
