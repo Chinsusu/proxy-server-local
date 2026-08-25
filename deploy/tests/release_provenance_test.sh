@@ -28,18 +28,28 @@ fi
 
 # Forged GitHub variables are ambient strings only: they must never make local
 # metadata promotable or appear in the candidate identity.
+set +e
 GITHUB_RUN_ID=999 GITHUB_RUN_ATTEMPT=7 GITHUB_SHA=0000000000000000000000000000000000000000 \
 GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v99.99.99 \
-    /bin/bash "${ROOT}/deploy/build-release.sh" "${build_args[@]}" test-release-v2 "${output}" >/dev/null
-grep -Fxq 'format pgw-version-v2' "${output}/version.manifest"
-grep -Fxq 'candidate_only true' "${output}/version.manifest"
-grep -Fxq 'promotion_authority external-github-attestation' "${output}/version.manifest"
-! grep -Eq 'github-actions|999|v99[.]99[.]99|production_eligible' "${output}/version.manifest"
-grep -Fxq 'format pgw-source-snapshot-v1' "${output}/source.manifest"
-grep -Fxq 'format pgw-build-proof-v2' "${output}/build-proof.manifest"
-grep -Fxq 'deterministic_builds 2' "${output}/build-proof.manifest"
-[[ "$(grep -c '^binary ' "${output}/build-proof.manifest")" == 6 ]]
-[[ "$(grep -c ' cgo=0 dynamic=absent rebuild=identical proof_sha256=' "${output}/build-proof.manifest")" == 6 ]]
+    /bin/bash "${ROOT}/deploy/build-release.sh" "${build_args[@]}" test-release-v2 "${output}" >"${fixture}/build.out" 2>"${fixture}/build.err"
+build_rc=$?
+set -e
+if ((build_rc != 0)); then
+    printf 'DEBUG build-release.sh rc=%s build_args=%s\n' "${build_rc}" "${build_args[*]:-}" >&2
+    printf 'DEBUG build.out:\n' >&2; cat "${fixture}/build.out" >&2
+    printf 'DEBUG build.err:\n' >&2; cat "${fixture}/build.err" >&2
+    exit "${build_rc}"
+fi
+printf 'DEBUG checkpoint: build-release.sh call itself succeeded\n' >&2
+grep -Fxq 'format pgw-version-v2' "${output}/version.manifest"; printf 'DEBUG a1\n' >&2
+grep -Fxq 'candidate_only true' "${output}/version.manifest"; printf 'DEBUG a2\n' >&2
+grep -Fxq 'promotion_authority external-github-attestation' "${output}/version.manifest"; printf 'DEBUG a3\n' >&2
+! grep -Eq 'github-actions|999|v99[.]99[.]99|production_eligible' "${output}/version.manifest"; printf 'DEBUG a4\n' >&2
+grep -Fxq 'format pgw-source-snapshot-v1' "${output}/source.manifest"; printf 'DEBUG a5\n' >&2
+grep -Fxq 'format pgw-build-proof-v2' "${output}/build-proof.manifest"; printf 'DEBUG a6\n' >&2
+grep -Fxq 'deterministic_builds 2' "${output}/build-proof.manifest"; printf 'DEBUG a7\n' >&2
+[[ "$(grep -c '^binary ' "${output}/build-proof.manifest")" == 6 ]]; printf 'DEBUG a8\n' >&2
+[[ "$(grep -c ' cgo=0 dynamic=absent rebuild=identical proof_sha256=' "${output}/build-proof.manifest")" == 6 ]]; printf 'DEBUG a9\n' >&2
 python3 "${ROOT}/deploy/verify_release_candidate.py" "${output}" >/dev/null
 printf 'DEBUG checkpoint: build+verify done\n' >&2
 
