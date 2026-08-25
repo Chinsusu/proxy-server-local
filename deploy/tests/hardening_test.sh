@@ -209,6 +209,12 @@ assert_contains "${ROOT}/deploy/tests/release_launcher_root_test.sh" 'result=rej
 assert_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" 'installer_harness.sh'
 assert_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" 'artifact_root="${temp_root}/release-artifacts"'
 assert_not_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" 'ROOT}/artifacts'
+assert_not_contains "${ROOT}/deploy/tests/installer_harness.sh" 'production_restore_snapshot'
+assert_contains "${ROOT}/deploy/tests/lifecycle_fake.sh" 'dispatch_restore_authority "$@"'
+assert_contains "${ROOT}/deploy/tests/lifecycle_fake.sh" '"$7" == /usr/local/share/pgw/web'
+assert_contains "${ROOT}/deploy/tests/lifecycle_fake.sh" '[[ -d "${target_arg}" && ! -L "${target_arg}" ]]'
+assert_contains "${ROOT}/deploy/tests/lifecycle_fake.sh" 'unsafe fixture restore-authority UI file'
+assert_not_contains "${ROOT}/deploy/install-pgw.sh" 'restore-authority'
 assert_contains "${ROOT}/deploy/tests/installer_harness.sh" 'production_release_file'
 assert_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" "'phase=restoring'"
 assert_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" 'restore_crash:'

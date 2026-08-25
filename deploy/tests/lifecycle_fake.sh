@@ -184,6 +184,76 @@ fake_curl() {
     [[ "${url}" != */login ]] || printf '<link href="/static/styles.css"><script src="/static/login.js"></script>\n'
 }
 
+grant_restore_authority() {
+    local target="${1:-}"
+    /usr/bin/python3 -I - "${root}" "${target}" "${EUID}" <<'PY'
+import os, stat, sys
+
+fixture, target, expected_text = sys.argv[1:]
+expected = int(expected_text)
+required_target = os.path.join(fixture, "system/usr/local/share/pgw/web")
+if (not os.path.isabs(fixture) or os.path.normpath(fixture) != fixture or
+        target != required_target):
+    raise SystemExit("unsafe fixture restore-authority target")
+
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+descriptor = os.open(os.sep, flags)
+try:
+    for component in (part for part in fixture.split(os.sep) if part):
+        child = os.open(component, flags, dir_fd=descriptor)
+        info = os.fstat(child)
+        if info.st_uid not in (0, expected) or info.st_mode & 0o022:
+            os.close(child)
+            raise SystemExit("unsafe fixture restore-authority ancestor")
+        os.close(descriptor)
+        descriptor = child
+    for component in ("system", "usr", "local", "share", "pgw", "web"):
+        child = os.open(component, flags, dir_fd=descriptor)
+        info = os.fstat(child)
+        if info.st_uid != expected or info.st_mode & 0o022:
+            os.close(child)
+            raise SystemExit("unsafe fixture restore-authority UI directory")
+        os.close(descriptor)
+        descriptor = child
+
+    web = descriptor
+    descriptor = -1
+    entries = sorted(os.listdir(web))
+    if entries not in (["static"], [".manifest.sha256", "static"]):
+        raise SystemExit("unexpected fixture restore-authority UI layout")
+    static_fd = os.open("static", flags, dir_fd=web)
+    try:
+        static_info = os.fstat(static_fd)
+        if static_info.st_uid != expected or static_info.st_mode & 0o022:
+            raise SystemExit("unsafe fixture restore-authority static directory")
+        if sorted(os.listdir(static_fd)) != ["app.js", "layout.css", "login.js", "styles.css"]:
+            raise SystemExit("unexpected fixture restore-authority static layout")
+
+        def admit_file(parent, name):
+            info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != expected or
+                    info.st_mode & 0o022 or info.st_nlink != 1):
+                raise SystemExit("unsafe fixture restore-authority UI file")
+
+        for name in ("app.js", "layout.css", "login.js", "styles.css"):
+            admit_file(static_fd, name)
+        if ".manifest.sha256" in entries:
+            admit_file(web, ".manifest.sha256")
+
+        os.fchmod(static_fd, stat.S_IMODE(static_info.st_mode) | 0o300)
+        os.fsync(static_fd)
+        web_info = os.fstat(web)
+        os.fchmod(web, stat.S_IMODE(web_info.st_mode) | 0o300)
+        os.fsync(web)
+    finally:
+        os.close(static_fd)
+        os.close(web)
+finally:
+    if descriptor >= 0:
+        os.close(descriptor)
+PY
+}
+
 mutate_fixture() {
     local system="${root}/system" phase="$1"
     [[ "$(tr -d '[:space:]' <"${root}/runtime/ip-forward")" == 0 ]] || {
@@ -247,6 +317,39 @@ dispatch_restore_crash() {
         exec /usr/bin/python3 -I "${root}/restore-crash-driver.py" "${helper}" "${@:3}"
 }
 
+dispatch_restore_authority() {
+    local helper state_arg source_arg target_arg metadata_arg logical_arg uid_arg snapshot_root
+    # Run only at the exact authenticated per-path restore call. Quiesce,
+    # snapshot verification, materialization, and metadata authentication have
+    # already succeeded; restore-crash interception runs before this adapter.
+    (($# == 8)) || return 0
+    [[ "$1" == -I && "$2" == */deploy/restore_snapshot.py &&
+       ("$3" == present || "$3" == absent) && "$7" == /usr/local/share/pgw/web ]] \
+        || return 0
+    helper="$2"; state_arg="$3"; source_arg="$4"; target_arg="$5"
+    metadata_arg="$6"; logical_arg="$7"; uid_arg="$8"
+    [[ -f "${helper}" && ! -L "${helper}" ]] \
+        || { printf 'invalid UI restore-authority helper argv\n' >&2; exit 98; }
+    [[ "${metadata_arg}" == "${root}"/system/run/pgw/snapshot-restore.install.*/metadata.json ]] \
+        || { printf 'invalid UI restore-authority metadata argv\n' >&2; exit 98; }
+    snapshot_root="${metadata_arg%/metadata.json}"
+    [[ "${target_arg}" == "${root}/system${logical_arg}" && "${uid_arg}" == "${EUID}" ]] \
+        || { printf 'invalid UI restore-authority target argv\n' >&2; exit 98; }
+    if [[ "${state_arg}" == present ]]; then
+        [[ "${source_arg}" == "${snapshot_root}/files${logical_arg}" ]] \
+            || { printf 'invalid UI restore-authority source argv\n' >&2; exit 98; }
+    else
+        [[ "${source_arg}" == /dev/null ]] \
+            || { printf 'invalid UI restore-authority absent argv\n' >&2; exit 98; }
+    fi
+    # Production needs override authority only to unlink children of a sealed
+    # directory. Missing targets and non-directories (including symlinks and
+    # special nodes) are handled descriptor-relatively by the real helper.
+    if [[ -d "${target_arg}" && ! -L "${target_arg}" ]]; then
+        grant_restore_authority "${target_arg}"
+    fi
+}
+
 case "$(basename -- "$0")" in
     systemctl) fake_systemctl "$@" ;;
     nft) fake_nft "$@" ;;
@@ -254,6 +357,7 @@ case "$(basename -- "$0")" in
     sqlite3) printf 'ok\n' ;;
     python3)
         dispatch_restore_crash "$@" || true
+        dispatch_restore_authority "$@"
         last_arg="${!#}"
         if [[ "${PGW_CRASH_LEGACY_SEALED:-0}" == 1 && "${2:-}" == */deploy/snapshot_payload.py && \
               "${3:-}" == materialize && "${last_arg}" == "${root}/system/run/pgw/legacy-sealed.install."* ]]; then
@@ -281,6 +385,7 @@ case "$(basename -- "$0")" in
     lifecycle)
         case "${1:-}" in
             mutate) mutate_fixture "${4}" ;;
+            restore-authority) grant_restore_authority "${2:-}" ;;
             install-base)
                 printf 'table inet pgw_base { chain forward { type filter hook forward priority filter; policy drop; } }\n' \
                     >"${root}/runtime/ruleset.nft"

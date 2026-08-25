@@ -138,6 +138,45 @@ make_fixture() {
     cp -a -- "${fixture}/runtime" "${fixture}/expected-runtime"
 }
 
+assert_restore_authority_contract() {
+    local fixture="${temp_root}/restore-authority-contract" command web static external rc
+    make_fixture "${fixture}" inactive
+    command="${fixture}/fake-bin/lifecycle"
+    web="${fixture}/system/usr/local/share/pgw/web"
+    static="${web}/static"
+    chmod 0550 "${web}" "${static}"
+    PGW_FAKE_ROOT="${fixture}" "${command}" restore-authority "${web}"
+    [[ "$(stat -c '%a' "${web}")" == 750 && "$(stat -c '%a' "${static}")" == 750 ]] \
+        || { printf 'restore-authority did not grant caller-only directory write\n' >&2; exit 1; }
+
+    chmod 0570 "${static}"
+    set +e
+    PGW_FAKE_ROOT="${fixture}" "${command}" restore-authority "${web}" >/dev/null 2>&1
+    rc=$?
+    set -e
+    [[ "${rc}" != 0 ]] || { printf 'restore-authority accepted group-writable tree\n' >&2; exit 1; }
+    chmod 0750 "${static}"
+
+    external="${fixture}/external-ui-asset"
+    printf 'external\n' >"${external}"
+    rm -f -- "${static}/app.js"
+    ln -s "${external}" "${static}/app.js"
+    set +e
+    PGW_FAKE_ROOT="${fixture}" "${command}" restore-authority "${web}" >/dev/null 2>&1
+    rc=$?
+    set -e
+    [[ "${rc}" != 0 ]] || { printf 'restore-authority accepted UI symlink\n' >&2; exit 1; }
+    rm -f -- "${static}/app.js"
+    mkfifo "${static}/app.js"
+    set +e
+    PGW_FAKE_ROOT="${fixture}" "${command}" restore-authority "${web}" >/dev/null 2>&1
+    rc=$?
+    set -e
+    [[ "${rc}" != 0 ]] || { printf 'restore-authority accepted special UI file\n' >&2; exit 1; }
+    rm -f -- "${static}/app.js"
+    printf 'old-ui-asset\n' >"${static}/app.js"
+}
+
 run_failure() {
     local fixture="$1" boundary="$2" restore_failure="${3:-}" rc
     set +e
@@ -232,6 +271,8 @@ PY
 
 index=0
 if [[ "${section}" == all || "${section}" == success ]]; then
+    printf 'test-only root restore-authority admission\n'
+    assert_restore_authority_contract
     printf 'successful upgrade and explicit rollback rehearsal\n'
     fixture="${temp_root}/success-rollback"
     make_fixture "${fixture}" active
@@ -257,6 +298,14 @@ if [[ "${section}" == all || "${section}" == success ]]; then
     done
     diff -r --no-dereference "${fixture}/expected-system" "${fixture}/system"
     diff -r --no-dereference "${fixture}/expected-runtime" "${fixture}/runtime"
+    for restored_ui_directory in web web/static; do
+        [[ "$(stat -c '%a' "${fixture}/system/usr/local/share/pgw/${restored_ui_directory}")" == \
+           "$(stat -c '%a' "${fixture}/expected-system/usr/local/share/pgw/${restored_ui_directory}")" ]] \
+            || { printf 'rollback did not restore UI directory mode: %s\n' "${restored_ui_directory}" >&2; exit 1; }
+    done
+    cmp -s "${fixture}/system/usr/local/share/pgw/web/static/app.js" \
+        "${fixture}/expected-system/usr/local/share/pgw/web/static/app.js" \
+        || { printf 'rollback did not restore UI asset content\n' >&2; exit 1; }
     [[ ! -e "${fixture}/system/var/lib/pgw-lifecycle/recovery.journal" ]]
     snapshot="$(find "${fixture}/backups" -mindepth 1 -maxdepth 1 -type d -name 'install.*' -print -quit)"
     [[ -n "${snapshot}" && -f "${snapshot}/snapshot.sha256" && -f "${snapshot}/snapshot.hmac" ]]
@@ -309,6 +358,59 @@ if [[ "${section}" == all || "${section}" == boundaries ]]; then
     grep -Fxq "forwarding-closed-before:${boundary}" "${fixture}/wan-sentinel.log"
     ! grep -Fq 'forwarding-open-before:' "${fixture}/wan-sentinel.log"
 done
+
+  for fresh_ui_boundary in after_binaries after_ui_assets; do
+      printf 'fresh-install absent UI rollback: %s\n' "${fresh_ui_boundary}"
+      fixture="${temp_root}/fresh-ui-${fresh_ui_boundary}"
+      make_fixture "${fixture}" active
+      rm -rf -- "${fixture}/system/usr/local/share/pgw/web" \
+          "${fixture}/expected-system/usr/local/share/pgw/web"
+      rc="$(run_failure "${fixture}" "${fresh_ui_boundary}")"
+      [[ "${rc}" == 1 ]] || {
+          printf 'fresh absent UI rollback %s returned %s, wanted 1\n' \
+              "${fresh_ui_boundary}" "${rc}" >&2
+          cat "${fixture}/installer.log" >&2
+          exit 1
+      }
+      [[ ! -e "${fixture}/system/usr/local/share/pgw/web" &&
+         ! -L "${fixture}/system/usr/local/share/pgw/web" ]] \
+          || { printf 'fresh absent UI rollback published residue: %s\n' "${fresh_ui_boundary}" >&2; exit 1; }
+      if find "${fixture}/system/usr/local/share/pgw" "${fixture}/system/run/pgw" \
+          -maxdepth 1 \( -name '.web.new.*' -o -name '.pgw-restore-*' -o \
+          -name 'snapshot-restore.install.*' \) -print -quit | grep -q .; then
+          printf 'fresh absent UI rollback left restore residue: %s\n' "${fresh_ui_boundary}" >&2
+          exit 1
+      fi
+      diff -r --no-dereference "${fixture}/expected-system" "${fixture}/system"
+      diff -r --no-dereference "${fixture}/expected-runtime" "${fixture}/runtime"
+  done
+
+  for fresh_ui_target in file symlink; do
+      printf 'fresh-install absent UI non-directory rollback: %s\n' "${fresh_ui_target}"
+      fixture="${temp_root}/fresh-ui-target-${fresh_ui_target}"
+      make_fixture "${fixture}" active
+      rm -rf -- "${fixture}/system/usr/local/share/pgw/web" \
+          "${fixture}/expected-system/usr/local/share/pgw/web"
+      rc="$(run_failure "${fixture}" "absent_ui_target:${fresh_ui_target}")"
+      [[ "${rc}" == 1 ]] || {
+          printf 'fresh absent UI %s target rollback returned %s, wanted 1\n' \
+              "${fresh_ui_target}" "${rc}" >&2
+          cat "${fixture}/installer.log" >&2
+          exit 1
+      }
+      grep -Fq "restore_snapshot.py absent /dev/null ${fixture}/system/usr/local/share/pgw/web" \
+          "${fixture}/commands.log" \
+          || { printf 'absent UI %s target did not reach production restore helper\n' "${fresh_ui_target}" >&2; exit 1; }
+      [[ ! -e "${fixture}/system/usr/local/share/pgw/web" &&
+         ! -L "${fixture}/system/usr/local/share/pgw/web" ]] \
+          || { printf 'absent UI %s target survived rollback\n' "${fresh_ui_target}" >&2; exit 1; }
+      if [[ "${fresh_ui_target}" == symlink ]]; then
+          grep -Fxq 'outside UI sentinel' "${fixture}/outside-ui-sentinel" \
+              || { printf 'absent UI symlink rollback changed external target\n' >&2; exit 1; }
+      fi
+      diff -r --no-dereference "${fixture}/expected-system" "${fixture}/system"
+      diff -r --no-dereference "${fixture}/expected-runtime" "${fixture}/runtime"
+  done
 
   printf 'capture resource boundary: depth/state-only recovery\n'
   fixture="${temp_root}/capture-resource-depth"
@@ -429,6 +531,15 @@ if [[ "${section}" == all || "${section}" == restore ]]; then
     rc="$(run_failure "${fixture}" after_services "${restore_failure}")"
     [[ "${rc}" == 125 ]] || { printf 'rollback failure %s returned %s, wanted 125\n' "${restore_failure}" "${rc}" >&2; exit 1; }
     grep -Fq 'CRITICAL: automatic rollback was partial or failed' "${fixture}/installer.log"
+    if [[ "${restore_failure}" == quiesce || "${restore_failure}" == copy ]]; then
+        [[ "$(stat -c '%a' "${fixture}/system/usr/local/share/pgw/web")" == 550 &&
+           "$(stat -c '%a' "${fixture}/system/usr/local/share/pgw/web/static")" == 550 ]] \
+            || { printf 'pre-copy restore failure changed sealed UI modes: %s\n' "${restore_failure}" >&2; exit 1; }
+        # Cleanup is outside the failure-boundary assertion and needs the same
+        # test-only authority that production root has over the sealed tree.
+        PGW_FAKE_ROOT="${fixture}" "${fixture}/fake-bin/lifecycle" restore-authority \
+            "${fixture}/system/usr/local/share/pgw/web"
+    fi
   done
 fi
 

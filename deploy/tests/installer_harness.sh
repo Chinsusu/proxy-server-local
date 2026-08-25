@@ -112,6 +112,19 @@ failure_point() {
         fi
         die "injected failure at $1"
     fi
+    if [[ "$1" == after_snapshot ]]; then
+        case "${PGW_FAIL_AT}" in
+            absent_ui_target:file)
+                printf 'injected non-directory UI target\n' >"${UI_ROOT}"
+                die "injected absent UI file target after snapshot"
+                ;;
+            absent_ui_target:symlink)
+                printf 'outside UI sentinel\n' >"${fixture}/outside-ui-sentinel"
+                ln -s "${fixture}/outside-ui-sentinel" "${UI_ROOT}"
+                die "injected absent UI symlink target after snapshot"
+                ;;
+        esac
+    fi
 }
 restore_failure_point() {
     [[ "${PGW_RESTORE_FAIL_AT}" != "$1" ]] || die "injected rollback failure at $1"
