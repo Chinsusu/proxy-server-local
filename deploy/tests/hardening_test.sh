@@ -185,6 +185,9 @@ assert_contains "${ROOT}/deploy/tests/release_launcher_root_test.sh" 'unsafe-anc
 assert_contains "${ROOT}/deploy/tests/release_launcher_root_test.sh" 'chmod 0770 "${unsafe_ancestor}"'
 assert_contains "${ROOT}/deploy/tests/release_launcher_root_test.sh" 'result=reject-126'
 assert_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" 'installer_harness.sh'
+assert_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" 'artifact_root="${temp_root}/release-artifacts"'
+assert_not_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" 'ROOT}/artifacts'
+assert_contains "${ROOT}/deploy/tests/installer_harness.sh" 'production_release_file'
 assert_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" "'phase=restoring'"
 assert_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" 'restore_crash:'
 assert_contains "${ROOT}/deploy/tests/installer_transaction_test.sh" 'capture resource boundary: nofile/state-only recovery'

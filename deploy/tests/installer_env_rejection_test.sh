@@ -117,7 +117,7 @@ else
     grep -Fq '[pgw-update] ERROR: production lifecycle requires' "${fixture}/direct.deploy-update.err"
     grep -Fq '[pgw-update-compat] ERROR: retired' "${fixture}/direct.compat-update.err"
     [[ "${harness_rc}" == 2 ]]
-    grep -Fq 'usage: installer_harness.sh FIXTURE BOUNDARY RESTORE_FAILURE' \
+    grep -Fq 'usage: installer_harness.sh FIXTURE BOUNDARY RESTORE_FAILURE ARTIFACT_ROOT' \
         "${fixture}/direct.harness.err"
 fi
 [[ ! -e "${sentinel}" ]]

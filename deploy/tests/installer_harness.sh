@@ -5,11 +5,34 @@ export PATH
 set -Eeuo pipefail
 
 ((EUID != 0)) || { printf 'installer harness must run non-root\n' >&2; exit 96; }
-(($# == 3)) || { printf 'usage: installer_harness.sh FIXTURE BOUNDARY RESTORE_FAILURE\n' >&2; exit 2; }
+(($# == 4)) || { printf 'usage: installer_harness.sh FIXTURE BOUNDARY RESTORE_FAILURE ARTIFACT_ROOT\n' >&2; exit 2; }
 
 fixture="$(cd -- "$1" && pwd -P)"
 boundary="$2"
 restore_failure="$3"
+[[ "$4" == /* && -d "$4" && ! -L "$4" ]] \
+    || { printf 'unsafe harness artifact root\n' >&2; exit 2; }
+artifact_root="$(cd -- "$4" && pwd -P)"
+[[ "${artifact_root}" == "$4" && "$(stat -c '%u:%a:%F' "${artifact_root}")" == "${EUID}:700:directory" ]] \
+    || { printf 'unsafe harness artifact root\n' >&2; exit 2; }
+transaction_root="$(dirname -- "${fixture}")"
+[[ "${artifact_root}" == "${transaction_root}/release-artifacts" && ! -L "${transaction_root}" &&
+   "$(stat -c '%u:%a:%F' "${transaction_root}")" == "${EUID}:700:directory" ]] \
+    || { printf 'harness artifacts are outside the private transaction root\n' >&2; exit 2; }
+artifact_count=0
+while IFS= read -r -d '' artifact; do
+    artifact_name="$(basename -- "${artifact}")"
+    case "${artifact_name}" in
+        pgw-api|pgw-agent|pgw-fwd|pgw-ui|pgw-health|pgw-snapshot-crypt) ;;
+        *) printf 'unexpected harness artifact: %s\n' "${artifact_name}" >&2; exit 2 ;;
+    esac
+    [[ -f "${artifact}" && ! -L "${artifact}" &&
+       "$(stat -c '%u:%a:%F:%h' "${artifact}")" == "${EUID}:555:regular file:1" ]] \
+        || { printf 'unsafe harness artifact: %s\n' "${artifact_name}" >&2; exit 2; }
+    ((artifact_count++)) || true
+done < <(find "${artifact_root}" -mindepth 1 -maxdepth 1 -print0)
+((artifact_count == 6)) || { printf 'incomplete harness artifact set\n' >&2; exit 2; }
+readonly artifact_root
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 
 export PGW_INSTALL_INTERNAL_SOURCE=pgw-nonroot-lifecycle-test-v1
@@ -28,10 +51,24 @@ source "${root}/deploy/install-pgw.sh"
 
 # Crash evidence wraps production functions only inside the validated non-root
 # harness.  The root installer has no crash/test environment or executable hook.
+eval "$(declare -f release_file | sed '1s/^release_file /production_release_file /')"
 eval "$(declare -f force_forwarding_off | sed '1s/^force_forwarding_off /production_force_forwarding_off /')"
 eval "$(declare -f capture_snapshot_payload | sed '1s/^capture_snapshot_payload /production_capture_snapshot_payload /')"
 eval "$(declare -f write_recovery_journal | sed '1s/^write_recovery_journal /production_write_recovery_journal /')"
 eval "$(declare -f execute_install_phase | sed '1s/^execute_install_phase /production_execute_install_phase /')"
+release_file() {
+    local relative="$1" artifact
+    case "${relative}" in
+        artifacts/pgw-api|artifacts/pgw-agent|artifacts/pgw-fwd|artifacts/pgw-ui|artifacts/pgw-health|artifacts/pgw-snapshot-crypt)
+            artifact="${artifact_root}/${relative#artifacts/}"
+            [[ -f "${artifact}" && ! -L "${artifact}" &&
+               "$(stat -c '%u:%a:%F:%h' "${artifact}")" == "${EUID}:555:regular file:1" ]] \
+                || die "unsafe test-only release artifact: ${relative}"
+            printf '%s\n' "${artifact}"
+            ;;
+        *) production_release_file "${relative}" ;;
+    esac
+}
 capture_crash_fired=0
 force_forwarding_off() {
     if [[ "${boundary}" == crash_capture:journal && "${capture_crash_fired}" == 0 ]]; then

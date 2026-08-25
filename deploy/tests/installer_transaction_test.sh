@@ -28,32 +28,22 @@ temp_parent="${PGW_TRANSACTION_TEMP_PARENT:-${ROOT}}"
 temp_root="$(mktemp -d "${temp_parent}/.pgw-transaction.XXXXXXXX")"
 # Failure evidence must not leave a credential-bearing transaction workspace
 # in the source checkout. Tests print their phase-specific logs before exit;
-# the fixture itself is always removed.
-helper_dir="${ROOT}/artifacts"
-helper="${helper_dir}/pgw-snapshot-crypt"
-helper_dir_created=0
-helper_created=0
+# the fixture and its test-only release artifacts are always removed together.
+artifact_root="${temp_root}/release-artifacts"
 cleanup() {
     rm -rf -- "${temp_root}"
-    if ((helper_created)); then rm -f -- "${helper}"; fi
-    if ((helper_dir_created)); then rmdir -- "${helper_dir}" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
 
-# The production release builder creates this artifact after source admission.
-# Build the same helper for the standalone lifecycle harness, then remove it so
-# neither the repository nor a later source-boundary test can consume residue.
-if [[ ! -d "${helper_dir}" ]]; then
-    mkdir -- "${helper_dir}"
-    chmod 0700 "${helper_dir}" 2>/dev/null || true
-    helper_dir_created=1
-fi
-[[ ! -e "${helper}" && ! -L "${helper}" ]] || {
-    printf 'refusing pre-existing snapshot helper fixture\n' >&2
-    exit 2
-}
-CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "${helper}" ./cmd/snapshot-crypt
-helper_created=1
+# The production release builder creates these artifacts after source
+# admission. Build the same binaries below the already-private transaction
+# root, never below the repository release tree consumed by production.
+install -d -m 0700 "${artifact_root}"
+for command_name in api agent fwd ui health snapshot-crypt; do
+    artifact="${artifact_root}/pgw-${command_name}"
+    CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "${artifact}" "./cmd/${command_name}"
+    chmod 0555 "${artifact}"
+done
 
 make_fixture() {
     local fixture="$1" mode="${2:-active}" system fake parent parent_mode parent_uid
@@ -152,7 +142,7 @@ run_failure() {
     local fixture="$1" boundary="$2" restore_failure="${3:-}" rc
     set +e
     PGW_HARNESS_TEST_PATH="${PATH}" /bin/bash "${ROOT}/deploy/tests/installer_harness.sh" \
-        "${fixture}" "${boundary}" "${restore_failure}" \
+        "${fixture}" "${boundary}" "${restore_failure}" "${artifact_root}" \
         >"${fixture}/stdout.log" 2>"${fixture}/installer.log"
     rc=$?
     set -e
@@ -165,7 +155,7 @@ run_failure_low_fd() {
     (
         ulimit -n 40
         PGW_HARNESS_TEST_PATH="${PATH}" /bin/bash "${ROOT}/deploy/tests/installer_harness.sh" \
-            "${fixture}" "${boundary}" "" \
+            "${fixture}" "${boundary}" "" "${artifact_root}" \
             >"${fixture}/stdout.log" 2>"${fixture}/installer.log"
     )
     rc=$?

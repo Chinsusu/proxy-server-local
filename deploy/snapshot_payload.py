@@ -827,6 +827,46 @@ def remove_legacy_report_runtime(destination: str, expected_uid: int) -> None:
         os.close(parent)
 
 
+def ensure_private_restore_parent(files: str, logical: str) -> str:
+    """Create only private container directories above one managed root."""
+    logical = canonical(logical)
+    components = logical.lstrip("/").split("/")[:-1]
+    expected_uid = os.geteuid() if hasattr(os, "geteuid") else 0
+    try:
+        descriptor = os.open(files, os.O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    except OSError:
+        die("unsafe restore parent")
+    try:
+        for component in components:
+            try:
+                child = os.open(
+                    component, os.O_RDONLY | O_DIRECTORY | O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                try:
+                    os.mkdir(component, 0o700, dir_fd=descriptor)
+                    os.fsync(descriptor)
+                    child = os.open(
+                        component, os.O_RDONLY | O_DIRECTORY | O_NOFOLLOW,
+                        dir_fd=descriptor,
+                    )
+                except OSError:
+                    die("unsafe restore parent")
+            except OSError:
+                die("unsafe restore parent")
+            info = os.fstat(child)
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != expected_uid or
+                    stat.S_IMODE(info.st_mode) != 0o700):
+                os.close(child)
+                die("unsafe restore parent")
+            os.close(descriptor)
+            descriptor = child
+    finally:
+        os.close(descriptor)
+    return os.path.join(files, *components)
+
+
 def materialize(snapshot: str, key: str, helper: str, destination: str) -> None:
     # Verify every ciphertext and receipt before creating the private stage. A
     # wrong key, missing/extra/truncated/tampered object leaves no plaintext.
@@ -839,13 +879,13 @@ def materialize(snapshot: str, key: str, helper: str, destination: str) -> None:
         records = payload["records"]
         for item in sorted((entry for entry in records if entry["kind"] == "directory"), key=lambda entry: entry["logical_path"].count("/")):
             target = os.path.join(files, item["logical_path"].lstrip("/"))
-            parent = os.path.dirname(target)
+            parent = ensure_private_restore_parent(files, item["logical_path"])
             if not os.path.isdir(parent) or os.path.islink(parent):
                 die("unsafe restore parent")
             os.mkdir(target, 0o700)
         for item in sorted((entry for entry in records if entry["kind"] in ("regular", "symlink")), key=lambda entry: entry["logical_path"]):
             target = os.path.join(files, item["logical_path"].lstrip("/"))
-            parent = os.path.dirname(target)
+            parent = ensure_private_restore_parent(files, item["logical_path"])
             if not os.path.isdir(parent) or os.path.islink(parent):
                 die("unsafe restore parent")
             if item["kind"] == "symlink":

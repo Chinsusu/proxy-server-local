@@ -155,6 +155,28 @@ with mock.patch.object(MODULE, "verify", side_effect=SystemExit("wrong key")), \
         raise AssertionError("materialize accepted an unverified ciphertext set")
     stage.assert_not_called()
 
+if os.name == "posix":
+    with tempfile.TemporaryDirectory() as temporary:
+        files = pathlib.Path(temporary) / "files"
+        files.mkdir(mode=0o700)
+        parent = MODULE.ensure_private_restore_parent(
+            str(files), "/usr/local/bin/pgw-api",
+        )
+        assert pathlib.Path(parent) == files / "usr/local/bin"
+        for scaffold in (files / "usr", files / "usr/local", files / "usr/local/bin"):
+            assert scaffold.is_dir() and not scaffold.is_symlink()
+            assert scaffold.stat().st_mode & 0o7777 == 0o700
+        outside = pathlib.Path(temporary) / "outside"
+        outside.mkdir(mode=0o700)
+        hostile = files / "etc"
+        hostile.symlink_to(outside, target_is_directory=True)
+        try:
+            MODULE.ensure_private_restore_parent(str(files), "/etc/pgw/secret")
+        except SystemExit as error:
+            assert str(error) == "unsafe restore parent"
+        else:
+            raise AssertionError("symlinked restore scaffold was accepted")
+
 # Key sequence allocation is durable and monotonic. The manifest validator
 # independently rejects reuse so a damaged ledger cannot produce a valid seal.
 with tempfile.TemporaryDirectory() as temporary:
