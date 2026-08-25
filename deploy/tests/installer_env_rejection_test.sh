@@ -111,6 +111,13 @@ PATH="${fixture}/hostile" "${HARNESS}" \
 harness_rc=$?
 set -e
 
+{
+    printf 'DEBUG update_rc=%s compat_rc=%s harness_rc=%s EUID=%s\n' "${update_rc}" "${compat_rc}" "${harness_rc}" "${EUID}"
+    printf 'DEBUG deploy-update.err: '; cat "${fixture}/direct.deploy-update.err"
+    printf 'DEBUG compat-update.err: '; cat "${fixture}/direct.compat-update.err"
+    printf 'DEBUG harness.err: '; cat "${fixture}/direct.harness.err"
+} >&2
+
 [[ "${update_rc}" == 126 ]]
 [[ "${compat_rc}" == 126 ]]
 if ((EUID == 0)); then
