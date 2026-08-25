@@ -115,6 +115,28 @@ assert_not_contains "${ROOT}/update-pgw.sh" '^[[:space:]]*git (reset|pull|fetch|
 assert_not_contains "${ROOT}/update-pgw.sh" 'git -C|PGW_REVIEWED_COMMIT must be'
 assert_contains "${ROOT}/deploy/install-pgw.sh" 'atomic_publish_directory'
 assert_contains "${ROOT}/deploy/install-pgw.sh" '/usr/local/share/pgw/web'
+assert_contains "${ROOT}/deploy/install-pgw.sh" 'install -d -o pgw-ui -g pgw-ui -m 0750 "${ui_stage}/static"'
+assert_contains "${ROOT}/deploy/install-pgw.sh" 'chmod 0550 "${ui_stage}/static"'
+"${PYTHON3}" -B - "${ROOT}/deploy/install-pgw.sh" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+start = source.index("install_ui_assets() {")
+end = source.index("\n}\n", start)
+body = source[start:end]
+markers = [
+    'ui_stage="$(mktemp -d "${parent}/.web.new.XXXXXXXX")"',
+    'install -d -o pgw-ui -g pgw-ui -m 0750 "${ui_stage}/static"',
+    'chmod 0550 "${ui_stage}/static"',
+    'chmod 0550 "${ui_stage}"',
+    'chown pgw-ui:pgw-ui "${ui_stage}"',
+    'atomic_publish_directory "${ui_stage}" "${UI_ROOT}"',
+]
+positions = [body.index(marker) for marker in markers]
+if positions != sorted(positions) or any(body.count(marker) != 1 for marker in markers):
+    raise SystemExit("unsafe UI stage construction/publication order")
+PY
 assert_contains "${ROOT}/deploy/install-pgw.sh" 'https://${ui_host}:8081/login'
 assert_contains "${ROOT}/deploy/install-pgw.sh" 'quiesce_runtime'
 assert_contains "${ROOT}/deploy/install-pgw.sh" 'enumerate_forwarder_units'

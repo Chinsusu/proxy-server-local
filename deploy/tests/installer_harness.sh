@@ -270,6 +270,8 @@ if [[ "${boundary}" == success_rollback ]]; then
     done
     (cd -- "${UI_ROOT}" && sha256sum -c .manifest.sha256 >/dev/null) \
         || die "production UI asset publication did not verify"
+    [[ "$(stat -c '%a' "${UI_ROOT}/static")" == 550 ]] \
+        || die "published UI static directory is not read-only"
     [[ -L "$(host_path /etc/pgw/credentials-current)" &&
        ! -e "$(host_path /etc/pgw/ui.crt)" && ! -e "$(host_path /etc/pgw/ui.key)" &&
        ! -e "$(host_path /etc/pgw/ui_proxy_token)" ]] \

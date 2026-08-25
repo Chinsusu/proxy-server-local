@@ -1367,7 +1367,10 @@ install_ui_assets() {
     parent="$(dirname -- "${UI_ROOT}")"
     install -d -o root -g root -m 0755 "${parent}"
     ui_stage="$(mktemp -d "${parent}/.web.new.XXXXXXXX")"
-    install -d -o pgw-ui -g pgw-ui -m 0550 "${ui_stage}/static"
+    # The unpublished stage root is still private (mktemp mode 0700), so its
+    # service-owned child can remain owner-writable while the installer fills
+    # it. Tighten the child before making the tree visible atomically.
+    install -d -o pgw-ui -g pgw-ui -m 0750 "${ui_stage}/static"
     for asset in app.js styles.css login.js layout.css; do
         install -o pgw-ui -g pgw-ui -m 0440 "$(release_file "web/static/${asset}")" "${ui_stage}/static/${asset}"
     done
@@ -1377,8 +1380,9 @@ install_ui_assets() {
     chmod 0440 "${installed_manifest}"
     (cd -- "${ui_stage}" && sha256sum -c .manifest.sha256 >/dev/null) || die "staged UI asset checksum mismatch"
     sync -f "${ui_stage}/static/app.js"
-    chown pgw-ui:pgw-ui "${ui_stage}"
+    chmod 0550 "${ui_stage}/static"
     chmod 0550 "${ui_stage}"
+    chown pgw-ui:pgw-ui "${ui_stage}"
     atomic_publish_directory "${ui_stage}" "${UI_ROOT}"
     ui_stage=""
 }
