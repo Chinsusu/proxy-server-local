@@ -30,8 +30,85 @@ temp_root="$(mktemp -d "${temp_parent}/.pgw-transaction.XXXXXXXX")"
 # in the source checkout. Tests print their phase-specific logs before exit;
 # the fixture and its test-only release artifacts are always removed together.
 artifact_root="${temp_root}/release-artifacts"
+cleanup_writable_dirs=()
+make_registered_cleanup_dirs_writable() {
+    if ((${#cleanup_writable_dirs[@]})); then
+        /usr/bin/python3 -I - "${temp_root}" "${cleanup_writable_dirs[@]}" <<'PY'
+import os
+import stat
+import sys
+
+root, *targets = sys.argv[1:]
+allowed = {
+    "capture-resource-depth/system/usr/local/share/pgw/web",
+    "capture-resource-depth/system/usr/local/share/pgw/web/static",
+    "capture-resource-depth/expected-system/usr/local/share/pgw/web",
+    "capture-resource-depth/expected-system/usr/local/share/pgw/web/static",
+}
+if (not os.path.isabs(root) or os.path.normpath(root) != root
+        or len(targets) != 4):
+    raise SystemExit("unsafe registered cleanup root")
+relative_targets = []
+for target in targets:
+    if not os.path.isabs(target) or os.path.normpath(target) != target:
+        raise SystemExit("unsafe registered cleanup path")
+    relative = os.path.relpath(target, root)
+    if relative not in allowed:
+        raise SystemExit("unregistered cleanup path")
+    relative_targets.append(relative)
+if set(relative_targets) != allowed:
+    raise SystemExit("incomplete registered cleanup paths")
+
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+descriptor = os.open(os.sep, flags)
+try:
+    for component in (part for part in root.split(os.sep) if part):
+        child = os.open(component, flags, dir_fd=descriptor)
+        info = os.fstat(child)
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.geteuid())
+                or info.st_mode & 0o022):
+            os.close(child)
+            raise SystemExit("unsafe registered cleanup ancestor")
+        os.close(descriptor)
+        descriptor = child
+    root_fd = descriptor
+    descriptor = -1
+    for relative in relative_targets:
+        current = os.dup(root_fd)
+        try:
+            missing = False
+            for component in relative.split("/"):
+                try:
+                    child = os.open(component, flags, dir_fd=current)
+                except FileNotFoundError:
+                    missing = True
+                    break
+                info = os.fstat(child)
+                if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                        or info.st_mode & 0o022):
+                    os.close(child)
+                    raise SystemExit("unsafe registered cleanup directory")
+                os.close(current)
+                current = child
+            if not missing:
+                info = os.fstat(current)
+                os.fchmod(current, stat.S_IMODE(info.st_mode) | 0o700)
+        finally:
+            os.close(current)
+    os.close(root_fd)
+finally:
+    if descriptor >= 0:
+        os.close(descriptor)
+PY
+    fi
+}
 cleanup() {
+    local rc=$?
+    trap - EXIT
+    set +e
+    make_registered_cleanup_dirs_writable
     rm -rf -- "${temp_root}"
+    exit "${rc}"
 }
 trap cleanup EXIT
 
@@ -1076,6 +1153,12 @@ done
       install -d "${deep_path}"
   done
   printf 'bounded-capture\n' >"${deep_path}/state"
+  cleanup_writable_dirs=(
+      "${fixture}/system/usr/local/share/pgw/web"
+      "${fixture}/system/usr/local/share/pgw/web/static"
+      "${fixture}/expected-system/usr/local/share/pgw/web"
+      "${fixture}/expected-system/usr/local/share/pgw/web/static"
+  )
   chmod 0440 "${fixture}/system/usr/local/share/pgw/web/static/"*
   chmod 0550 "${fixture}/system/usr/local/share/pgw/web/static" \
       "${fixture}/system/usr/local/share/pgw/web"
@@ -1098,6 +1181,8 @@ done
   assert_capture_recoverability_gate "${fixture}" "${capture_snapshot}" 0
   [[ ! -e "${fixture}/system/var/lib/pgw-lifecycle/recovery.journal" ]]
   ! grep -Eq 'python3 .*restore_snapshot.py verify ' "${fixture}/commands.log"
+  make_registered_cleanup_dirs_writable
+  cleanup_writable_dirs=()
 
   if [[ "$(uname -s)" == Linux ]]; then
       printf 'capture resource boundary: nofile/state-only recovery\n'
@@ -1235,7 +1320,7 @@ if [[ "${section}" == all || "${section}" == capture-crash ]]; then
   printf 'snapshot validation cleanup failure retains durable recovery evidence\n'
   fixture="${temp_root}/validation-cleanup-failure"
   make_fixture "${fixture}" active
-  : >"${fixture}/fail-snapshot-validation-cleanup"
+  printf 'inject cleanup failure\n' >"${fixture}/fail-snapshot-validation-cleanup"
   chmod 0600 "${fixture}/fail-snapshot-validation-cleanup"
   rc="$(run_failure "${fixture}" after_services)"
   [[ "${rc}" == 125 ]] || {
