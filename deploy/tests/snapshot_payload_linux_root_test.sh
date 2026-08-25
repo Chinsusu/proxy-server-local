@@ -5,10 +5,6 @@
 # and a private stage before descriptor-bound host restore.
 set -Eeuo pipefail
 
-# sudo resets PATH to the sudoers secure_path, which drops the pinned Go
-# toolchain actions/setup-go placed on PATH for this job (falling back to
-# an older distro-packaged go that doesn't satisfy go.mod's version floor).
-PATH="/usr/local/go/bin:${PATH}"
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 required="${PGW_REQUIRE_SNAPSHOT_PAYLOAD_ROOT_EVIDENCE:-0}"
 [[ "${required}" == 0 || "${required}" == 1 ]] || exit 2
@@ -25,7 +21,7 @@ fixture="$(mktemp -d /run/pgw-snapshot-payload-test.XXXXXXXX)"
 trap 'rm -rf -- "${fixture}"' EXIT
 chmod 0700 "${fixture}"
 helper="${fixture}/pgw-snapshot-crypt"
-(cd "${ROOT}" && CGO_ENABLED=0 GOENV=off GOTOOLCHAIN=local go build -o "${helper}" ./cmd/snapshot-crypt)
+(cd "${ROOT}" && CGO_ENABLED=0 GOENV=off go build -o "${helper}" ./cmd/snapshot-crypt)
 
 source_root="${fixture}/source"
 snapshot="${fixture}/snapshot"
