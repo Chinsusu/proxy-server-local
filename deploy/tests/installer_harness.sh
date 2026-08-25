@@ -78,12 +78,23 @@ force_forwarding_off() {
     production_force_forwarding_off "$@"
 }
 capture_snapshot_payload() {
+    local snapshot_name validation_stage
     if [[ "${boundary}" == crash_capture:quiesced ]]; then
         kill -KILL "$$"
     fi
     production_capture_snapshot_payload "$@"
     if [[ "${boundary}" == crash_capture:payload ]]; then
         kill -KILL "$$"
+    fi
+    if [[ "${boundary}" == validation_collision:symlink ]]; then
+        snapshot_name="$(basename -- "${backup_dir}")"
+        [[ "${snapshot_name}" =~ ^install[.][A-Za-z0-9]+$ ]] \
+            || die "invalid collision snapshot name"
+        validation_stage="${fixture}/system/run/pgw/snapshot-validation.${snapshot_name}"
+        [[ ! -e "${validation_stage}" && ! -L "${validation_stage}" ]] \
+            || die "stale validation collision fixture"
+        printf 'outside validation sentinel\n' >"${fixture}/outside-validation-sentinel"
+        ln -s "${fixture}/outside-validation-sentinel" "${validation_stage}"
     fi
 }
 write_recovery_journal() {

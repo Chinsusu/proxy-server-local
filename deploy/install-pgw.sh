@@ -120,6 +120,7 @@ recovery_attempt_failed=0
 ui_stage=""
 legacy_sealed_stage=""
 snapshot_restore_stage=""
+snapshot_validation_stage=""
 
 log() { printf '[pgw-install] %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
@@ -441,6 +442,10 @@ recover_interrupted_lifecycle() {
             [[ "${journal[state_hash]}" == "${expected_id}" ]] \
                 || die "CRITICAL: capture state evidence authentication mismatch"
             mutated=1
+            if ! remove_snapshot_validation_stage_for_snapshot "${snapshot}"; then
+                recovery_attempt_failed=1
+                die "CRITICAL: interrupted snapshot validation cleanup failed; runtime remains fail-closed"
+            fi
             if [[ -e "${snapshot}/snapshot.sha256" || -e "${snapshot}/snapshot.hmac" ]]; then
                 [[ -f "${snapshot}/snapshot.sha256" && -f "${snapshot}/snapshot.hmac" ]] \
                     || die "CRITICAL: capture seal is incomplete; runtime remains fail-closed"
@@ -866,6 +871,59 @@ remove_snapshot_stage() {
     "${PYTHON3}" -I "$(release_file deploy/snapshot_payload.py)" remove-stage "${stage}" "${expected_uid}"
 }
 
+remove_snapshot_validation_stage_for_snapshot() {
+    local snapshot="$1" snapshot_name stage
+    [[ "${snapshot}" == "${BACKUP_ROOT}"/install.* && -d "${snapshot}" && ! -L "${snapshot}" ]] \
+        || return 1
+    snapshot_name="$(basename -- "${snapshot}")"
+    [[ "${snapshot_name}" =~ ^install[.][A-Za-z0-9]+$ ]] || return 1
+    stage="$(host_path "/run/pgw/snapshot-validation.${snapshot_name}")"
+    [[ "${stage}" == "$(host_path /run/pgw)/snapshot-validation.${snapshot_name}" ]] \
+        || return 1
+    [[ -e "${stage}" || -L "${stage}" ]] || return 0
+    remove_snapshot_stage "${stage}"
+}
+
+validate_captured_snapshot_recoverability() {
+    local snapshot_name stage key helper rc=0 cleanup_rc=0
+    [[ -n "${backup_dir}" && "${backup_dir}" == "${BACKUP_ROOT}"/install.* && \
+       -d "${backup_dir}" && ! -L "${backup_dir}" ]] || return 1
+    snapshot_name="$(basename -- "${backup_dir}")"
+    [[ "${snapshot_name}" =~ ^install[.][A-Za-z0-9]+$ ]] || return 1
+    stage="$(host_path "/run/pgw/snapshot-validation.${snapshot_name}")"
+    [[ "${stage}" == "$(host_path /run/pgw)/snapshot-validation.${snapshot_name}" ]] \
+        || return 1
+    snapshot_validation_stage="${stage}"
+    if [[ -e "${stage}" || -L "${stage}" ]]; then
+        recovery_attempt_failed=1
+        return 1
+    fi
+    key="$(host_path /etc/pgw/snapshot-encryption.key)"
+    helper="$(release_file artifacts/pgw-snapshot-crypt)"
+
+    if "${PYTHON3}" -I "$(release_file deploy/snapshot_payload.py)" materialize \
+        "${backup_dir}" "${key}" "${helper}" "${stage}"; then
+        if "${PYTHON3}" -I "$(release_file deploy/restore_snapshot.py)" metadata "${stage}"; then
+            "${PYTHON3}" -I "$(release_file deploy/restore_snapshot.py)" verify \
+                "${stage}" payload "${SYSTEM_ROOT:-/}" || rc=$?
+        else
+            rc=$?
+        fi
+    else
+        rc=$?
+    fi
+
+    if [[ -e "${stage}" || -L "${stage}" ]]; then
+        remove_snapshot_stage "${stage}" || cleanup_rc=$?
+    fi
+    if ((cleanup_rc != 0)); then
+        recovery_attempt_failed=1
+        return "${cleanup_rc}"
+    fi
+    snapshot_validation_stage=""
+    return "${rc}"
+}
+
 # A legacy migration materializes plaintext only in this deterministic private
 # /run stage. The authenticated recovery journal binds the snapshot identity;
 # derive the one permissible cleanup target from that identity rather than
@@ -960,6 +1018,8 @@ capture_state() {
         record_backup_path "${path}"
     done
     capture_snapshot_payload
+    validate_captured_snapshot_recoverability \
+        || die "rollback ciphertext payload is not recoverable"
     write_snapshot_metadata
     # The authenticated seal exists and bounded payload verification passed.
     # Any subsequent failure must perform full recovery; it may never fall back
@@ -1277,6 +1337,14 @@ on_exit() {
         rm -rf -- "${ui_stage}" || true
     fi
     cleanup_legacy_import_runtime || true
+    if [[ -n "${snapshot_validation_stage}" && \
+          "${snapshot_validation_stage}" == "$(host_path /run/pgw)/snapshot-validation.install."* ]]; then
+        if remove_snapshot_stage "${snapshot_validation_stage}"; then
+            snapshot_validation_stage=""
+        else
+            recovery_attempt_failed=1
+        fi
+    fi
     if [[ -n "${snapshot_restore_stage}" && "${snapshot_restore_stage}" == "$(host_path /run/pgw)/snapshot-restore.install."* ]]; then
         remove_snapshot_stage "${snapshot_restore_stage}" || true
     fi

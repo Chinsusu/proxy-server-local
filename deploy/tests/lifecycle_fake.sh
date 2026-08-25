@@ -491,6 +491,121 @@ finally:
 PY
 }
 
+grant_snapshot_validation_cleanup_authority() {
+    local stage="${1:-}" expected_uid="${2:-}"
+    /usr/bin/python3 -I - "${root}" "${stage}" "${expected_uid}" <<'PY'
+import os
+import re
+import stat
+import sys
+
+fixture, stage_path, expected_text = sys.argv[1:]
+expected = int(expected_text)
+prefix = "snapshot-validation."
+stage_name = os.path.basename(stage_path)
+snapshot_name = stage_name[len(prefix):] if stage_name.startswith(prefix) else ""
+if (not os.path.isabs(fixture) or os.path.normpath(fixture) != fixture
+        or re.fullmatch(r"install[.][A-Za-z0-9]+", snapshot_name) is None
+        or stage_path != os.path.join(fixture, "system/run/pgw", stage_name)):
+    raise SystemExit("unsafe fixture snapshot-validation stage")
+
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def open_safe(parent, name, owners, mode=None):
+    descriptor = os.open(name, flags, dir_fd=parent)
+    info = os.fstat(descriptor)
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in owners
+            or info.st_mode & 0o022
+            or (mode is not None and stat.S_IMODE(info.st_mode) != mode)):
+        os.close(descriptor)
+        raise ValueError("unsafe fixture snapshot-validation directory")
+    return descriptor
+
+
+def identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def grant_tree(parent, name):
+    before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if stat.S_ISDIR(before.st_mode):
+        if before.st_uid != expected or before.st_mode & 0o022:
+            raise ValueError("unsafe snapshot-validation child directory")
+        child = os.open(name, flags, dir_fd=parent)
+        try:
+            opened = os.fstat(child)
+            rebound = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if ((opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                    or (rebound.st_dev, rebound.st_ino) != (opened.st_dev, opened.st_ino)):
+                raise ValueError("snapshot-validation directory changed")
+            os.fchmod(child, stat.S_IMODE(opened.st_mode) | 0o300)
+            names = sorted(os.listdir(child))
+            for member in names:
+                if not member or member in (".", "..") or "/" in member or "\x00" in member:
+                    raise ValueError("unsafe snapshot-validation member")
+                grant_tree(child, member)
+            rebound = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (sorted(os.listdir(child)) != names
+                    or (rebound.st_dev, rebound.st_ino) != (opened.st_dev, opened.st_ino)
+                    or (os.fstat(child).st_dev, os.fstat(child).st_ino) !=
+                       (opened.st_dev, opened.st_ino)):
+                raise ValueError("snapshot-validation directory rebound")
+            os.fsync(child)
+        finally:
+            os.close(child)
+        return
+    if stat.S_ISREG(before.st_mode):
+        if before.st_uid != expected or before.st_nlink != 1 or before.st_mode & 0o022:
+            raise ValueError("unsafe snapshot-validation regular file")
+    elif stat.S_ISLNK(before.st_mode):
+        if before.st_uid != expected:
+            raise ValueError("foreign snapshot-validation symlink")
+    else:
+        raise ValueError("special snapshot-validation node")
+    after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if identity(after) != identity(before):
+        raise ValueError("snapshot-validation node changed")
+
+
+descriptor = os.open(os.sep, flags)
+try:
+    for component in (part for part in fixture.split(os.sep) if part):
+        child = open_safe(descriptor, component, (0, expected))
+        os.close(descriptor)
+        descriptor = child
+    fixture_fd = descriptor
+    descriptor = -1
+    backups_fd = open_safe(fixture_fd, "backups", (expected,))
+    try:
+        snapshot_fd = open_safe(backups_fd, snapshot_name, (expected,), 0o700)
+        os.close(snapshot_fd)
+    finally:
+        os.close(backups_fd)
+    system_fd = open_safe(fixture_fd, "system", (expected,))
+    try:
+        run_fd = open_safe(system_fd, "run", (expected,))
+        try:
+            pgw_fd = open_safe(run_fd, "pgw", (expected,))
+            try:
+                stage_fd = open_safe(pgw_fd, stage_name, (expected,), 0o700)
+                os.close(stage_fd)
+                grant_tree(pgw_fd, stage_name)
+                os.fsync(pgw_fd)
+            finally:
+                os.close(pgw_fd)
+        finally:
+            os.close(run_fd)
+    finally:
+        os.close(system_fd)
+        os.close(fixture_fd)
+finally:
+    if descriptor >= 0:
+        os.close(descriptor)
+PY
+}
+
 mutate_fixture() {
     local system="${root}/system" phase="$1"
     [[ "$(tr -d '[:space:]' <"${root}/runtime/ip-forward")" == 0 ]] || {
@@ -589,14 +704,77 @@ dispatch_restore_authority() {
     fi
 }
 
+dispatch_snapshot_validation_crash() {
+    local point="" stage="" snapshot_name snapshot rc
+    case "${PGW_FAIL_AT:-}" in
+        crash_validation:materialized)
+            (($# == 7)) || return 0
+            [[ "$1" == -I && "$2" == */deploy/snapshot_payload.py && "$3" == materialize ]] \
+                || return 0
+            snapshot="$4"; stage="$7"; point=materialized
+            ;;
+        crash_validation:metadata)
+            (($# == 4)) || return 0
+            [[ "$1" == -I && "$2" == */deploy/restore_snapshot.py && "$3" == metadata ]] \
+                || return 0
+            stage="$4"; point=metadata
+            ;;
+        crash_validation:verified)
+            (($# == 6)) || return 0
+            [[ "$1" == -I && "$2" == */deploy/restore_snapshot.py && "$3" == verify &&
+               "$5" == payload && "$6" == "${root}/system" ]] || return 0
+            stage="$4"; point=verified
+            ;;
+        *) return 0 ;;
+    esac
+    [[ -f "$2" && ! -L "$2" &&
+       "${stage}" == "${root}/system/run/pgw/snapshot-validation.install."* ]] \
+        || { printf 'invalid snapshot-validation crash argv\n' >&2; exit 98; }
+    snapshot_name="${stage##*/snapshot-validation.}"
+    [[ "${snapshot_name}" =~ ^install[.][A-Za-z0-9]+$ ]] \
+        || { printf 'invalid snapshot-validation crash stage name\n' >&2; exit 98; }
+    [[ -n "${snapshot:-}" ]] || snapshot="${root}/backups/${snapshot_name}"
+    [[ "${snapshot}" == "${root}/backups/${snapshot_name}" && -d "${snapshot}" && ! -L "${snapshot}" ]] \
+        || { printf 'invalid snapshot-validation crash identity\n' >&2; exit 98; }
+    /usr/bin/python3 "$@"
+    rc=$?
+    ((rc == 0)) || exit "${rc}"
+    printf 'snapshot-validation-crash:%s\n' "${point}" >>"${root}/commands.log"
+    kill -KILL "${PPID}"
+    kill -KILL "$$"
+}
+
+dispatch_snapshot_validation_cleanup_authority() {
+    (($# == 5)) || return 0
+    [[ "$1" == -I && "$2" == */deploy/snapshot_payload.py && "$3" == remove-stage &&
+       "$4" == "${root}/system/run/pgw/snapshot-validation."* ]] || return 0
+    [[ -f "$2" && ! -L "$2" && "$5" == "${EUID}" ]] \
+        || { printf 'invalid snapshot-validation cleanup argv\n' >&2; exit 98; }
+    if [[ -d "$4" && ! -L "$4" ]]; then
+        grant_snapshot_validation_cleanup_authority "$4" "$5"
+    fi
+}
+
 case "$(basename -- "$0")" in
     systemctl) fake_systemctl "$@" ;;
     nft) fake_nft "$@" ;;
     sysctl) fake_sysctl "$@" ;;
     sqlite3) printf 'ok\n' ;;
     python3)
+        dispatch_snapshot_validation_crash "$@"
         dispatch_restore_crash "$@" || true
         dispatch_restore_authority "$@"
+        if [[ -f "${root}/fail-snapshot-validation-cleanup" &&
+              ! -L "${root}/fail-snapshot-validation-cleanup" &&
+              "$(stat -c '%u:%a:%F' "${root}/fail-snapshot-validation-cleanup")" == \
+                  "${EUID}:600:regular file" &&
+              $# == 5 && "$1" == -I && "$2" == */deploy/snapshot_payload.py &&
+              "$3" == remove-stage &&
+              "$4" == "${root}/system/run/pgw/snapshot-validation.install."* &&
+              "$5" == "${EUID}" ]]; then
+            exit 86
+        fi
+        dispatch_snapshot_validation_cleanup_authority "$@"
         last_arg="${!#}"
         if [[ "${PGW_CRASH_LEGACY_SEALED:-0}" == 1 && "${2:-}" == */deploy/snapshot_payload.py && \
               "${3:-}" == materialize && "${last_arg}" == "${root}/system/run/pgw/legacy-sealed.install."* ]]; then

@@ -678,6 +678,37 @@ run_failure() {
     printf '%s\n' "${rc}"
 }
 
+assert_capture_recoverability_gate() {
+    local fixture="$1" snapshot="$2" expected_verify_count="$3" stage
+    local materialize_stats metadata_stats verify_stats cleanup_stats
+    local materialize_line metadata_line verify_line cleanup_line
+    stage="${fixture}/system/run/pgw/snapshot-validation.$(basename -- "${snapshot}")"
+    materialize_stats="$(awk -v command='snapshot_payload.py materialize' -v stage="${stage}" \
+        'index($0,command) && index($0,stage) {count++; line=NR} END {print count+0 ":" line+0}' \
+        "${fixture}/commands.log")"
+    metadata_stats="$(awk -v command="restore_snapshot.py metadata ${stage}" \
+        'index($0,command) {count++; line=NR} END {print count+0 ":" line+0}' \
+        "${fixture}/commands.log")"
+    verify_stats="$(awk -v command="restore_snapshot.py verify ${stage} payload ${fixture}/system" \
+        'index($0,command) {count++; line=NR} END {print count+0 ":" line+0}' \
+        "${fixture}/commands.log")"
+    cleanup_stats="$(awk -v command="snapshot_payload.py remove-stage ${stage} ${EUID}" \
+        'index($0,command) {count++; line=NR} END {print count+0 ":" line+0}' \
+        "${fixture}/commands.log")"
+    [[ "${materialize_stats%%:*}" == 1 && "${metadata_stats%%:*}" == 1 &&
+       "${verify_stats%%:*}" == "${expected_verify_count}" && "${cleanup_stats%%:*}" == 1 ]]
+    materialize_line="${materialize_stats#*:}"
+    metadata_line="${metadata_stats#*:}"
+    verify_line="${verify_stats#*:}"
+    cleanup_line="${cleanup_stats#*:}"
+    ((materialize_line < metadata_line && metadata_line < cleanup_line))
+    if ((expected_verify_count == 1)); then
+        ((metadata_line < verify_line && verify_line < cleanup_line))
+    fi
+    [[ ! -e "${stage}" && ! -L "${stage}" ]] \
+        || { printf 'snapshot recoverability validation left plaintext residue\n' >&2; return 1; }
+}
+
 print_bounded_fixture_evidence() {
     /usr/bin/python3 -I - "$1" <<'PY'
 import os
@@ -921,6 +952,7 @@ if [[ "${section}" == all || "${section}" == success ]]; then
     [[ ! -e "${fixture}/system/var/lib/pgw-lifecycle/recovery.journal" ]]
     snapshot="$(find "${fixture}/backups" -mindepth 1 -maxdepth 1 -type d -name 'install.*' -print -quit)"
     [[ -n "${snapshot}" && -f "${snapshot}/snapshot.sha256" && -f "${snapshot}/snapshot.hmac" ]]
+    assert_capture_recoverability_gate "${fixture}" "${snapshot}" 1
     if [[ -n "${evidence_dir}" ]]; then
         [[ "${evidence_dir}" == /* && -d "${evidence_dir}" && ! -L "${evidence_dir}" &&
            "$(stat -c '%u' "${evidence_dir}")" == "${EUID}" ]] || {
@@ -1044,6 +1076,9 @@ done
       install -d "${deep_path}"
   done
   printf 'bounded-capture\n' >"${deep_path}/state"
+  chmod 0440 "${fixture}/system/usr/local/share/pgw/web/static/"*
+  chmod 0550 "${fixture}/system/usr/local/share/pgw/web/static" \
+      "${fixture}/system/usr/local/share/pgw/web"
   rm -rf -- "${fixture}/expected-system"
   cp -a -- "${fixture}/system" "${fixture}/expected-system"
   rc="$(run_failure "${fixture}" after_services)"
@@ -1060,6 +1095,7 @@ done
   capture_snapshot="$(find "${fixture}/backups" -mindepth 1 -maxdepth 1 -type d -name 'install.*' -print -quit)"
   [[ -n "${capture_snapshot}" && ! -e "${capture_snapshot}/snapshot.sha256" && \
      ! -e "${capture_snapshot}/snapshot.hmac" ]]
+  assert_capture_recoverability_gate "${fixture}" "${capture_snapshot}" 0
   [[ ! -e "${fixture}/system/var/lib/pgw-lifecycle/recovery.journal" ]]
   ! grep -Eq 'python3 .*restore_snapshot.py verify ' "${fixture}/commands.log"
 
@@ -1081,6 +1117,7 @@ done
       capture_snapshot="$(find "${fixture}/backups" -mindepth 1 -maxdepth 1 -type d -name 'install.*' -print -quit)"
       [[ -n "${capture_snapshot}" && ! -e "${capture_snapshot}/snapshot.sha256" && \
          ! -e "${capture_snapshot}/snapshot.hmac" ]]
+      assert_capture_recoverability_gate "${fixture}" "${capture_snapshot}" 1
       [[ ! -e "${fixture}/system/var/lib/pgw-lifecycle/recovery.journal" ]]
       [[ "$(grep -Ec 'python3 .*restore_snapshot.py verify ' "${fixture}/commands.log")" == 1 ]]
   else
@@ -1144,6 +1181,137 @@ if [[ "${section}" == all || "${section}" == capture-crash ]]; then
           grep -Fq 'state evidence only' "${fixture}/installer.log"
       fi
   done
+
+  for validation_crash_point in materialized metadata verified; do
+      printf 'snapshot validation plaintext crash recovery: %s\n' "${validation_crash_point}"
+      fixture="${temp_root}/validation-crash-${validation_crash_point}"
+      make_fixture "${fixture}" active
+      validation_sibling="${fixture}/system/run/pgw/snapshot-validation.not-snapshot"
+      install -d -m 0700 "${validation_sibling}"
+      printf 'validation sibling canary\n' >"${validation_sibling}/canary"
+      cp -a -- "${validation_sibling}" \
+          "${fixture}/expected-system/run/pgw/snapshot-validation.not-snapshot"
+      sibling_digest="$(sha256sum "${validation_sibling}/canary" | awk '{print $1}')"
+      rc="$(run_failure "${fixture}" "crash_validation:${validation_crash_point}")"
+      [[ "${rc}" == 137 ]] || {
+          printf 'snapshot validation crash %s returned %s, wanted 137\n' \
+              "${validation_crash_point}" "${rc}" >&2
+          cat "${fixture}/installer.log" >&2
+          exit 1
+      }
+      journal="${fixture}/system/var/lib/pgw-lifecycle/recovery.journal"
+      [[ -f "${journal}" && ! -L "${journal}" ]]
+      grep -Fxq 'phase=capturing' "${journal}"
+      snapshot="$(sed -n 's/^snapshot=//p' "${journal}")"
+      validation_stage="${fixture}/system/run/pgw/snapshot-validation.$(basename -- "${snapshot}")"
+      [[ -d "${validation_stage}" && ! -L "${validation_stage}" &&
+         "$(stat -c '%u:%a:%F' "${validation_stage}")" == "${EUID}:700:directory" &&
+         -f "${validation_stage}/files/var/lib/pgw/pgw.db" &&
+         ! -e "${snapshot}/snapshot.sha256" && ! -e "${snapshot}/snapshot.hmac" ]]
+      case "${validation_crash_point}" in
+          materialized) [[ ! -e "${validation_stage}/metadata.json" ]] ;;
+          metadata|verified) [[ -f "${validation_stage}/metadata.json" &&
+              ! -L "${validation_stage}/metadata.json" ]] ;;
+      esac
+      grep -Fq "snapshot-validation-crash:${validation_crash_point}" \
+          "${fixture}/commands.log"
+      [[ "$(sha256sum "${validation_sibling}/canary" | awk '{print $1}')" == \
+          "${sibling_digest}" ]]
+      recover_rc="$(run_failure "${fixture}" recover)"
+      [[ "${recover_rc}" == 0 ]] || {
+          printf 'snapshot validation crash recovery %s returned %s\n' \
+              "${validation_crash_point}" "${recover_rc}" >&2
+          cat "${fixture}/installer.log" >&2
+          exit 1
+      }
+      [[ ! -e "${validation_stage}" && ! -L "${validation_stage}" && ! -e "${journal}" ]]
+      [[ "$(sha256sum "${validation_sibling}/canary" | awk '{print $1}')" == \
+          "${sibling_digest}" ]]
+      diff -r --no-dereference "${fixture}/expected-system" "${fixture}/system"
+      diff -r --no-dereference "${fixture}/expected-runtime" "${fixture}/runtime"
+      grep -Fq 'state evidence only' "${fixture}/installer.log"
+  done
+
+  printf 'snapshot validation cleanup failure retains durable recovery evidence\n'
+  fixture="${temp_root}/validation-cleanup-failure"
+  make_fixture "${fixture}" active
+  : >"${fixture}/fail-snapshot-validation-cleanup"
+  chmod 0600 "${fixture}/fail-snapshot-validation-cleanup"
+  rc="$(run_failure "${fixture}" after_services)"
+  [[ "${rc}" == 125 ]] || {
+      printf 'snapshot validation cleanup failure returned %s, wanted 125\n' "${rc}" >&2
+      cat "${fixture}/installer.log" >&2
+      exit 1
+  }
+  journal="${fixture}/system/var/lib/pgw-lifecycle/recovery.journal"
+  [[ -f "${journal}" && ! -L "${journal}" ]]
+  grep -Fxq 'phase=capturing' "${journal}"
+  snapshot="$(sed -n 's/^snapshot=//p' "${journal}")"
+  validation_stage="${fixture}/system/run/pgw/snapshot-validation.$(basename -- "${snapshot}")"
+  [[ -d "${validation_stage}" && ! -L "${validation_stage}" &&
+     -f "${validation_stage}/files/var/lib/pgw/pgw.db" &&
+     ! -e "${snapshot}/snapshot.sha256" && ! -e "${snapshot}/snapshot.hmac" ]]
+  [[ "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 0 ]]
+  ! awk -F '\t' '$3=="active" {found=1} END {exit found?0:1}' "${fixture}/runtime/services"
+  grep -Fq 'automatic rollback was partial or failed' "${fixture}/installer.log"
+  rm -f -- "${fixture}/fail-snapshot-validation-cleanup"
+  recover_rc="$(run_failure "${fixture}" recover)"
+  [[ "${recover_rc}" == 0 ]] || {
+      printf 'snapshot validation cleanup recovery returned %s\n' "${recover_rc}" >&2
+      cat "${fixture}/installer.log" >&2
+      exit 1
+  }
+  [[ ! -e "${validation_stage}" && ! -L "${validation_stage}" && ! -e "${journal}" ]]
+  diff -r --no-dereference "${fixture}/expected-system" "${fixture}/system"
+  diff -r --no-dereference "${fixture}/expected-runtime" "${fixture}/runtime"
+
+  printf 'unsafe snapshot validation collision remains fail-closed across retries\n'
+  fixture="${temp_root}/validation-collision-symlink"
+  make_fixture "${fixture}" active
+  validation_sibling="${fixture}/system/run/pgw/snapshot-validation.not-snapshot"
+  install -d -m 0700 "${validation_sibling}"
+  printf 'collision sibling canary\n' >"${validation_sibling}/canary"
+  cp -a -- "${validation_sibling}" \
+      "${fixture}/expected-system/run/pgw/snapshot-validation.not-snapshot"
+  sibling_digest="$(sha256sum "${validation_sibling}/canary" | awk '{print $1}')"
+  rc="$(run_failure "${fixture}" validation_collision:symlink)"
+  [[ "${rc}" == 125 ]] || {
+      printf 'snapshot validation collision returned %s, wanted 125\n' "${rc}" >&2
+      cat "${fixture}/installer.log" >&2
+      exit 1
+  }
+  journal="${fixture}/system/var/lib/pgw-lifecycle/recovery.journal"
+  snapshot="$(sed -n 's/^snapshot=//p' "${journal}")"
+  validation_stage="${fixture}/system/run/pgw/snapshot-validation.$(basename -- "${snapshot}")"
+  [[ -L "${validation_stage}" && -f "${fixture}/outside-validation-sentinel" &&
+     ! -L "${fixture}/outside-validation-sentinel" ]]
+  outside_digest="$(sha256sum "${fixture}/outside-validation-sentinel" | awk '{print $1}')"
+  [[ "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 0 ]]
+  ! awk -F '\t' '$3=="active" {found=1} END {exit found?0:1}' "${fixture}/runtime/services"
+  for retry in 1 2; do
+      recover_rc="$(run_failure "${fixture}" recover)"
+      [[ "${recover_rc}" == 125 && -L "${validation_stage}" && -f "${journal}" ]]
+      [[ "$(sha256sum "${fixture}/outside-validation-sentinel" | awk '{print $1}')" == \
+          "${outside_digest}" ]]
+      [[ "$(sha256sum "${validation_sibling}/canary" | awk '{print $1}')" == \
+          "${sibling_digest}" ]]
+      [[ "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 0 ]]
+      ! awk -F '\t' '$3=="active" {found=1} END {exit found?0:1}' "${fixture}/runtime/services"
+  done
+  rm -f -- "${validation_stage}"
+  recover_rc="$(run_failure "${fixture}" recover)"
+  [[ "${recover_rc}" == 0 ]] || {
+      printf 'snapshot validation collision recovery returned %s\n' "${recover_rc}" >&2
+      cat "${fixture}/installer.log" >&2
+      exit 1
+  }
+  [[ ! -e "${validation_stage}" && ! -L "${validation_stage}" && ! -e "${journal}" ]]
+  [[ "$(sha256sum "${fixture}/outside-validation-sentinel" | awk '{print $1}')" == \
+      "${outside_digest}" ]]
+  [[ "$(sha256sum "${validation_sibling}/canary" | awk '{print $1}')" == \
+      "${sibling_digest}" ]]
+  diff -r --no-dereference "${fixture}/expected-system" "${fixture}/system"
+  diff -r --no-dereference "${fixture}/expected-runtime" "${fixture}/runtime"
 fi
 
 if [[ "${section}" == all || "${section}" == restore ]]; then
