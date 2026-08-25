@@ -1508,19 +1508,6 @@ if [[ "${section}" == all || "${section}" == crash ]]; then
     crash_rc="$(run_failure "${crash_fixture}" "${legacy_crash}")"
     [[ "${crash_rc}" == 137 ]] || { printf 'legacy sealed crash returned %s, wanted 137\n' "${crash_rc}" >&2; exit 1; }
     journal="${crash_fixture}/system/var/lib/pgw-lifecycle/recovery.journal"
-    {
-        printf 'DEBUG %s: lifecycle dir listing\n' "${legacy_crash}"
-        ls -la "${crash_fixture}/system/var/lib/pgw-lifecycle/" 2>&1
-        printf 'DEBUG %s: run/pgw listing\n' "${legacy_crash}"
-        find "${crash_fixture}/system/run/pgw" -maxdepth 2 2>&1
-        printf 'DEBUG %s: backups listing\n' "${legacy_crash}"
-        ls -la "${crash_fixture}/backups" 2>&1
-        printf 'DEBUG %s: installer.log\n' "${legacy_crash}"
-        cat "${crash_fixture}/installer.log" 2>&1
-        printf 'DEBUG %s: stdout.log\n' "${legacy_crash}"
-        cat "${crash_fixture}/stdout.log" 2>&1
-        printf 'DEBUG %s: END\n' "${legacy_crash}"
-    } >&2 || true
     snapshot="$(sed -n 's/^snapshot=//p' "${journal}")"
     [[ -f "${journal}" && "${snapshot}" == "${crash_fixture}/backups"/install.* ]]
     sealed_stage="${crash_fixture}/system/run/pgw/legacy-sealed.$(basename -- "${snapshot}")"

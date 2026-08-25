@@ -785,9 +785,13 @@ case "$(basename -- "$0")" in
             fi
             rc=$?
             ((rc == 0)) || exit "${rc}"
-            # This fake is a direct child of the installer harness. SIGKILL
-            # its parent so the harness EXIT trap cannot scrub the stage.
-            kill -KILL "${PPID}"
+            # This fake runs as its own process forked from the
+            # execute_install_phase subshell, so PPID is only that subshell,
+            # not the harness. SIGKILL the harness's real PID (handed down via
+            # PGW_HARNESS_PID) so its EXIT trap cannot run and scrub the
+            # stage; killing only the subshell would let on_exit auto-recover
+            # in-process, which defeats this boundary's separate-recover test.
+            kill -KILL "${PGW_HARNESS_PID:?PGW_HARNESS_PID must be set for crash_legacy_sealed}"
             kill -KILL "$$"
         fi
         if [[ "$(uname -s)" == MINGW* ]]; then

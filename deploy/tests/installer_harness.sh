@@ -212,10 +212,16 @@ if [[ "${boundary}" == recover_restore_crash ]]; then
 fi
 if [[ "${boundary}" == crash_legacy_sealed ]]; then
     # lifecycle_fake kills immediately after production materialization and
-    # before the sealed plaintext can be consumed or removed.
+    # before the sealed plaintext can be consumed or removed. The fake tool
+    # runs as its own process, so its PPID is only the execute_install_phase
+    # subshell, not this harness. Give it this script's real PID so the kill
+    # reaches the harness itself: on_exit must never run, exactly like
+    # crash_ready and crash_legacy_post_import, so the durable journal and
+    # sealed stage survive for the separate boundary=recover pass.
     legacy_state_pending=1
     legacy_state_checksum="$(printf '0%.0s' {1..64})"
     export PGW_CRASH_LEGACY_SEALED=1
+    export PGW_HARNESS_PID="$$"
 fi
 capture_state
 if [[ "${boundary}" == crash_capture:* ]]; then
