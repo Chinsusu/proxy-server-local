@@ -1503,7 +1503,7 @@ if [[ "${section}" == all || "${section}" == crash ]]; then
     printf 'legacy sealed-stage SIGKILL recovery boundary\n'
     crash_fixture="${temp_root}/legacy-sealed-${legacy_crash}"
     make_fixture "${crash_fixture}" active
-    printf '{"legacy":"fixture"}\n' >"${crash_fixture}/system/var/lib/pgw/state.json"
+    printf '{"proxies":{},"clients":{},"mappings":{}}\n' >"${crash_fixture}/system/var/lib/pgw/state.json"
     cp -- "${crash_fixture}/system/var/lib/pgw/state.json" "${crash_fixture}/expected-system/var/lib/pgw/state.json"
     crash_rc="$(run_failure "${crash_fixture}" "${legacy_crash}")"
     [[ "${crash_rc}" == 137 ]] || { printf 'legacy sealed crash returned %s, wanted 137\n' "${crash_rc}" >&2; cat "${crash_fixture}/installer.log" >&2; exit 1; }
@@ -1536,7 +1536,7 @@ if [[ "${section}" == all || "${section}" == crash ]]; then
     for residue_kind in malformed symlink; do
         crash_fixture="${temp_root}/legacy-sealed-${residue_kind}"
         make_fixture "${crash_fixture}" active
-        printf '{"legacy":"fixture"}\n' >"${crash_fixture}/system/var/lib/pgw/state.json"
+        printf '{"proxies":{},"clients":{},"mappings":{}}\n' >"${crash_fixture}/system/var/lib/pgw/state.json"
         cp -- "${crash_fixture}/system/var/lib/pgw/state.json" "${crash_fixture}/expected-system/var/lib/pgw/state.json"
         crash_rc="$(run_failure "${crash_fixture}" crash_legacy_sealed)"
         [[ "${crash_rc}" == 137 ]]
@@ -1579,7 +1579,7 @@ if [[ "${section}" == all || "${section}" == crash ]]; then
     for residue_kind in runtime-mode runtime-symlink report-mode report-symlink; do
         crash_fixture="${temp_root}/legacy-report-${residue_kind}"
         make_fixture "${crash_fixture}" active
-        printf '{"legacy":"fixture"}\n' >"${crash_fixture}/system/var/lib/pgw/state.json"
+        printf '{"proxies":{},"clients":{},"mappings":{}}\n' >"${crash_fixture}/system/var/lib/pgw/state.json"
         cp -- "${crash_fixture}/system/var/lib/pgw/state.json" "${crash_fixture}/expected-system/var/lib/pgw/state.json"
         crash_rc="$(run_failure "${crash_fixture}" crash_legacy_post_import)"
         [[ "${crash_rc}" == 137 ]]
