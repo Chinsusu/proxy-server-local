@@ -1668,8 +1668,8 @@ try:
             os.initgroups(account.pw_name,account.pw_gid); os.setgid(account.pw_gid); os.setuid(account.pw_uid)
         preexec_fn=drop_privileges
     for fd in (statefd,keyfd,reportfd): os.set_inheritable(fd,True)
-    result=subprocess.run([api,"import-legacy-state","--state-fd",str(statefd),"--database",database,"--key-fd",str(keyfd),"--report-fd",str(reportfd)],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,pass_fds=(statefd,keyfd,reportfd),preexec_fn=preexec_fn,check=False)
-    if result.returncode != 0: raise SystemExit("import failed")
+    result=subprocess.run([api,"import-legacy-state","--state-fd",str(statefd),"--database",database,"--key-fd",str(keyfd),"--report-fd",str(reportfd)],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,pass_fds=(statefd,keyfd,reportfd),preexec_fn=preexec_fn,check=False)
+    if result.returncode != 0: raise SystemExit("DEBUG import failed rc=%r out=%r" % (result.returncode, result.stdout))
 finally:
     for fd_name in ("statefd","keyfd","reportfd","rfd"):
         fd=locals().get(fd_name)
