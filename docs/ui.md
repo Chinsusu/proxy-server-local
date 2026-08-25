@@ -1,19 +1,10 @@
-# UI
+# PGW v2 UI
 
-- Chạy tại `:8081`
-- Reverse proxy:
-  - `/api/*` → `PGW_UI_API` (mặc định `http://127.0.0.1:8080`)
-  - `/agent/*` → `PGW_UI_AGENT` (mặc định `http://127.0.0.1:9090/agent`)
+UI serves HTTPS from the verified read-only asset tree and proxies only public
+API routes to `PGW_UI_API`. A scoped UI proxy token authenticates that hop.
 
-## Tính năng
-- Dashboard: thống kê, bảng Proxies (status/latency/exit_ip), bảng Mappings.
-- Nút:
-  - **Health All** (check tất cả proxies)
-  - **Reconcile** (gọi agent)
-  - **Create Proxy**, **Create Mapping**
-  - **Delete Mapping**, **Delete Client** (qua API)
-- Ghi nhớ tab đã chọn bằng `localStorage`.
+UI has no Agent route, Agent token, nftables capability or systemd authority.
+Desired/applied/data-plane state shown in the UI comes from the public API.
 
-## Khi UI "trắng"
-- Thường do API dùng memory store → sau restart **trống dữ liệu**. Tạo lại proxy/client/mapping rồi **Reconcile**.
-- Sai cấu hình `PGW_UI_AGENT` → `/agent/reconcile` trả 404/405 → chỉnh env và restart `pgw-ui`.
+Smoke test the deterministic login route and static assets as documented in
+`docs/deploy.md`.

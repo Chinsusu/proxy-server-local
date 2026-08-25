@@ -1,0 +1,11 @@
+add table inet pgw_dynamic
+add counter inet pgw_dynamic web_redirect_total
+add counter inet pgw_dynamic forwarder_input_accept_total
+add counter inet pgw_dynamic forwarder_input_drop_total
+add chain inet pgw_dynamic prerouting { type nat hook prerouting priority dstnat; policy accept; }
+add rule inet pgw_dynamic prerouting iifname "lan0" ip saddr 192.168.2.101/32 tcp dport { 80, 443 } counter name web_redirect_total redirect to :15001
+add rule inet pgw_dynamic prerouting iifname "lan0" ip saddr 192.168.2.128/25 tcp dport { 80, 443 } counter name web_redirect_total redirect to :15002
+add chain inet pgw_dynamic input_guard { type filter hook input priority 0; policy accept; }
+add rule inet pgw_dynamic input_guard iifname "lan0" ip saddr 192.168.2.101/32 tcp dport 15001 counter name forwarder_input_accept_total accept
+add rule inet pgw_dynamic input_guard iifname "lan0" ip saddr 192.168.2.128/25 tcp dport 15002 counter name forwarder_input_accept_total accept
+add rule inet pgw_dynamic input_guard iifname "lan0" tcp dport 15001-15999 counter name forwarder_input_drop_total drop

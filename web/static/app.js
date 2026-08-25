@@ -1,805 +1,155 @@
-class PGWManager {
-  constructor() {
-    this.apiBase = '/api';
-    this.agentBase = '/agent';
-    this.proxies = [];
-    this.clients = [];
-    this.mappings = [];
-    this.loading = false;
-    // sorting state (persisted)
-    this.pSort = 'address'; this.pAsc = true;
-    this.mSort = 'client'; this.mAsc = true;
+(() => {
+  'use strict';
+
+  const API = '/api/v2';
+  const CONTROL_PLANE_CHECK = '/api/v1/proxies/';
+  const PAGE_LIMIT = 200;
+  const MAX_PAGE_ITEMS = 5000;
+  const state = { proxies: [], clients: [], policies: [], mappings: [], agent: null, audits: [], nextAuditCursor: '', loadEpoch: 0, loadController: null };
+  const byID = (id) => document.getElementById(id);
+  const text = (value) => value === undefined || value === null || value === '' ? '—' : String(value);
+  const iso = (value) => value ? new Date(value).toLocaleString() : '—';
+  const itemList = (page) => Array.isArray(page) ? page : (page?.items || []);
+  const idKey = (prefix) => `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+
+  function announce(message, urgent = false) {
+    const live = byID(urgent ? 'ui-errors' : 'ui-status');
+    if (live) live.textContent = message;
+  }
+  function clearNode(node) { while (node?.firstChild) node.removeChild(node.firstChild); }
+  function cell(row, value, className = '') { const td = document.createElement('td'); td.textContent = text(value); if (className) td.className = className; row.append(td); return td; }
+  function button(label, className, click) { const result = document.createElement('button'); result.type = 'button'; result.className = className; result.textContent = label; result.addEventListener('click', click); return result; }
+  function statusMark(value) { const mark = document.createElement('span'); const normalized = value || 'UNKNOWN'; mark.className = `status-mark state-${normalized.toLowerCase()}`; mark.textContent = normalized; mark.setAttribute('aria-label', `Status: ${normalized}`); return mark; }
+  function mappingVersion(mapping) { return `"${Number(mapping.version || 0)}"`; }
+
+  async function request(path, options = {}) {
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 12000);
+    const parentSignal = options.signal;
+    const abortFromParent = () => controller.abort();
+    parentSignal?.addEventListener('abort', abortFromParent, { once: true });
+    const headers = new Headers(options.headers || {});
+    if (options.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
     try {
-      const sp = JSON.parse(localStorage.getItem('pgw_sort_p2') || '{}');
-      if (sp && sp.k) { this.pSort = sp.k; this.pAsc = !!sp.a; }
-      const sm = JSON.parse(localStorage.getItem('pgw_sort_m2') || '{}');
-      if (sm && sm.k) { this.mSort = sm.k; this.mAsc = !!sm.a; }
-    } catch (_) { }
-
-    this.init();
-  }
-
-  init() {
-    this.bindEvents();
-    this.loadData();
-
-    // Auto refresh every 30 seconds
-    setInterval(() => this.loadData(), 30000);
-  }
-
-  bindEvents() {
-    // Refresh button
-    document.getElementById('btn-refresh')?.addEventListener('click', () => {
-      this.loadData();
-    });
-
-    // Health check all proxies
-    document.getElementById('btn-health-all')?.addEventListener('click', () => {
-      this.healthCheckAll();
-    });
-
-    // Reconcile rules
-    document.getElementById('btn-reconcile')?.addEventListener('click', () => {
-      this.reconcileRules();
-    });
-
-    // Create proxy form
-    document.getElementById('form-proxy')?.addEventListener('submit', (e) => {
-      e.preventDefault();
-      this.createProxy();
-    });
-
-
-    // Import proxies (bulk)
-    document.getElementById("btn-import-proxies")?.addEventListener("click", (e) => {
-      e.preventDefault();
-      this.importProxies();
-    });
-    // Create mapping form
-    document.getElementById('form-mapping')?.addEventListener('submit', (e) => {
-      e.preventDefault();
-      this.createMapping();
-    });
-  }
-
-  async apiCall(url, options = {}) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-      const response = await fetch(url, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...options.headers
-        },
-        signal: controller.signal,
-        ...options
-      });
-      clearTimeout(timeout);
-
-      // Auto-redirect to login on 401 Unauthorized
-      if (response.status === 401) {
-        window.location.href = '/login';
-        return null;
-      }
-
+      const response = await fetch(path, { ...options, headers, signal: controller.signal, credentials: 'same-origin' });
+      if (response.status === 401) { window.location.assign('/login'); throw new Error('Your session has expired.'); }
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        let detail = {};
+        try { detail = await response.json(); } catch (_) { /* never render raw upstream responses */ }
+        const error = new Error(detail?.error?.message || `Request failed (${response.status}).`);
+        error.status = response.status; error.code = detail?.error?.code; error.details = detail?.error?.details;
+        throw error;
       }
+      return response.status === 204 ? null : response.json();
+    } finally { clearTimeout(timer); parentSignal?.removeEventListener('abort', abortFromParent); }
+  }
+  function mutation(method, path, version, body) {
+    const headers = { 'Idempotency-Key': idKey('ui') };
+    if (version !== undefined && version !== null) headers['If-Match'] = version;
+    return request(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  }
 
-      if (response.status === 204) {
-        return null;
-      }
-
-      return await response.json();
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        console.error('API call timed out:', url);
-        this.showAlert('API request timed out — is the server running?', 'warning');
-      } else {
-        console.error('API call failed:', error);
-        this.showAlert('API call failed: ' + error.message, 'danger');
-      }
-      throw error;
+  async function loadPaged(resource, signal) {
+    const items = []; const cursors = new Set(); let cursor = '';
+    while (true) {
+      const params = new URLSearchParams({ limit: String(PAGE_LIMIT) }); if (cursor) params.set('cursor', cursor);
+      const page = await request(`${API}/${resource}?${params}`, { signal }); const pageItems = itemList(page);
+      if (items.length + pageItems.length > MAX_PAGE_ITEMS) throw new Error(`${resource} exceeded the safe UI pagination limit.`);
+      items.push(...pageItems);
+      const next = page?.next_cursor;
+      if (!next) return items;
+      if (typeof next !== 'string' || cursors.has(next)) throw new Error(`${resource} pagination cursor is invalid or repeated.`);
+      cursors.add(next); cursor = next;
     }
   }
 
-  async loadData() {
-    if (this.loading) return;
-
-    this.loading = true;
-    let _spinnerTO = setTimeout(() => this.showLoading(true), 700);
-
-    try {
-      const [proxies, clients, mappings] = await Promise.all([
-        this.apiCall(`${this.apiBase}/v1/proxies`),
-        this.apiCall(`${this.apiBase}/v1/clients`),
-        this.apiCall(`${this.apiBase}/v1/mappings/active`)
-      ]);
-
-      this.proxies = proxies || [];
-      this.clients = clients || [];
-      this.mappings = mappings || [];
-
-      this.renderStats();
-      this.renderProxies();
-      this.renderProxySummary();
-      this.renderMappings();
-      this.renderClients();
-      this.updateCounts();
-      this.updateLastRefresh();
-      this.checkServices();
-
-    } catch (error) {
-      console.error('Failed to load data:', error);
-    } finally {
-      this.loading = false;
-      clearTimeout(_spinnerTO);
-      this.showLoading(false);
-    }
+  function normalizeIPv4(value) {
+    const raw = String(value || '').trim(); const cidr = raw.split('/');
+    if (cidr.length > 2 || (cidr.length === 2 && cidr[1] !== '32')) return null;
+    const address = cidr[0]; const parts = address.split('.');
+    if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)) return null;
+    return `${parts.map((part) => String(Number(part))).join('.')}/32`;
   }
-
-  async checkServices() {
-    // API health
-    const apiEl = document.getElementById('api-status');
-    if (apiEl) {
-      try {
-        const r = await fetch(`${this.apiBase}/v1/health`, { method: 'GET' });
-        if (r.ok) {
-          apiEl.textContent = 'Running';
-          apiEl.className = 'badge text-bg-success';
-        } else {
-          apiEl.textContent = 'Error';
-          apiEl.className = 'badge text-bg-warning';
-        }
-      } catch {
-        apiEl.textContent = 'Down';
-        apiEl.className = 'badge text-bg-danger';
-      }
+  function validatePreview() {
+    const clientInput = byID('mapping-client-ip'); const proxyID = byID('mapping-proxy')?.value; const policyID = byID('mapping-policy')?.value; const port = Number(byID('mapping-port')?.value); const errors = [];
+    const normalized = normalizeIPv4(clientInput?.value);
+    if (!normalized) errors.push('Enter one IPv4 client address; it will be normalized to /32.');
+    if (!proxyID) errors.push('Choose an enabled proxy.');
+    const policy = state.policies.find((candidate) => candidate.id === policyID);
+    if (!policy || policy.kind !== 'web_only' || !policy.enabled) errors.push('Choose an enabled web_only policy.');
+    if (!Number.isInteger(port) || port < 15001 || port > 15999) errors.push('Redirect port must be between 15001 and 15999.');
+    if (state.mappings.some((mapping) => mapping.local_redirect_port === port && mapping.desired_state !== 'DELETED')) errors.push('That redirect port is already reserved by a non-deleted mapping.');
+    const proxy = state.proxies.find((candidate) => candidate.id === proxyID);
+    if (proxy && (!proxy.enabled || proxy.status === 'DOWN')) errors.push('Selected proxy is unavailable; choose an enabled compatible proxy.');
+    const output = byID('mapping-preview'); const inputError = byID('mapping-client-error');
+    clientInput?.setAttribute('aria-invalid', String(!normalized)); if (inputError) inputError.textContent = normalized ? '' : 'A valid IPv4 address is required.';
+    if (output) {
+      clearNode(output); const title = document.createElement('strong'); title.textContent = errors.length ? 'Validation needs attention' : 'Client-side validation preview'; output.append(title);
+      const list = document.createElement('ul');
+      (errors.length ? errors : [`Client: ${normalized}`, `Proxy: ${proxy?.label || proxy?.host || proxyID}`, 'Policy: web_only (TCP 80/443 only)', `Redirect port: ${port}`, 'No direct fallback: traffic is never sent directly to WAN.', 'Capability matrix is not exposed by this API; server-side validation remains authoritative.']).forEach((message) => { const item = document.createElement('li'); item.textContent = message; list.append(item); });
+      output.append(list); output.classList.toggle('validation-failed', errors.length > 0);
     }
-
-    // Agent health
-    const agentEl = document.getElementById('agent-status');
-    if (agentEl) {
-      try {
-        const r = await fetch(`${this.agentBase}/health`, { method: 'HEAD' });
-        if (r.ok) {
-          agentEl.textContent = 'Running';
-          agentEl.className = 'badge text-bg-success';
-        } else {
-          agentEl.textContent = 'Error';
-          agentEl.className = 'badge text-bg-warning';
-        }
-      } catch {
-        agentEl.textContent = 'Down';
-        agentEl.className = 'badge text-bg-danger';
-      }
-    }
-
-    // Forwarder status: inferred from applied mappings
-    const fwdEl = document.getElementById('fwd-status');
-    if (fwdEl) {
-      const applied = (this.mappings || []).filter(m => m.state === 'APPLIED').length;
-      if (applied > 0) {
-        fwdEl.textContent = `${applied} active`;
-        fwdEl.className = 'badge text-bg-success';
-      } else if ((this.mappings || []).length > 0) {
-        fwdEl.textContent = 'Pending';
-        fwdEl.className = 'badge text-bg-warning';
-      } else {
-        fwdEl.textContent = 'No mappings';
-        fwdEl.className = 'badge text-bg-secondary';
-      }
-    }
+    return { valid: errors.length === 0, normalized, proxyID, policyID, port };
   }
-
-  renderStats() {
-    const okProxies = this.proxies.filter(p => p.status === 'OK').length;
-    const activeMappings = this.mappings.filter(m => m.client?.enabled && m.proxy?.enabled).length;
-
-    this.updateElement('stat-proxies', this.proxies.length);
-    this.updateElement('stat-proxies-ok', okProxies);
-    this.updateElement('stat-clients', this.clients.length);
-    this.updateElement('stat-mappings', activeMappings);
+  function fillMappingForm() {
+    const proxy = byID('mapping-proxy'); const policy = byID('mapping-policy');
+    if (proxy) { clearNode(proxy); proxy.append(new Option('Choose an enabled proxy', '')); state.proxies.filter((item) => item.enabled).forEach((item) => proxy.append(new Option(`${item.label || item.host}:${item.port} (${item.status || 'UNKNOWN'})`, item.id))); }
+    if (policy) { clearNode(policy); policy.append(new Option('Choose web_only policy', '')); state.policies.filter((item) => item.enabled && item.kind === 'web_only').forEach((item) => policy.append(new Option(`${item.name} — TCP 80/443`, item.id))); }
   }
-
-  renderProxies() {
-    const tbody = document.getElementById('tbody-proxies');
-    if (!tbody) return;
-    // sort
-    const key = this.pSort, asc = this.pAsc;
-    const val = (p) => {
-      if (key === 'id') return (p.id || '');
-      if (key === 'type') return (p.type || '');
-      if (key === 'address') return ((p.host || '') + ':' + p.port).toLowerCase();
-      if (key === 'status') return (p.status || '');
-      if (key === 'latency') return (p.latency_ms == null ? Infinity : p.latency_ms);
-      if (key === 'exit') return (p.exit_ip || '');
-      if (key === 'last') return (p.last_checked_at || '');
-      return ((p.host || '') + ':' + p.port).toLowerCase();
-    };
-    const sorted = (this.proxies || []).slice().sort((a, b) => { const va = val(a), vb = val(b); if (va < vb) return asc ? -1 : 1; if (va > vb) return asc ? 1 : -1; return 0; });
-    // header icons + click
-    const thead = tbody.parentElement?.querySelector('thead');
-    if (thead) {
-      const arrow = asc ? ' \\u25B2' : ' \\u25BC';
-      thead.innerHTML = '<tr>'
-        + '<th data-k="id" class="sortable">ID' + (key === 'id' ? arrow : '') + '</th>'
-        + '<th data-k="type" class="sortable">Type' + (key === 'type' ? arrow : '') + '</th>'
-        + '<th data-k="address" class="sortable">Address' + (key === 'address' ? arrow : '') + '</th>'
-        + '<th data-k="status" class="sortable">Status' + (key === 'status' ? arrow : '') + '</th>'
-        + '<th data-k="latency" class="sortable">Latency' + (key === 'latency' ? arrow : '') + '</th>'
-        + '<th data-k="exit" class="sortable">Exit IP' + (key === 'exit' ? arrow : '') + '</th>'
-        + '<th data-k="last" class="sortable">Last Check' + (key === 'last' ? arrow : '') + '</th>'
-        + '<th>Actions</th>'
-        + '</tr>';
-      thead.querySelectorAll('th.sortable').forEach((th) => {
-        th.style.cursor = 'pointer'; th.onclick = () => {
-          const k = th.getAttribute('data-k');
-          if (this.pSort === k) this.pAsc = !this.pAsc; else { this.pSort = k; this.pAsc = true; }
-          localStorage.setItem('pgw_sort_p2', JSON.stringify({ k: this.pSort, a: this.pAsc }));
-          this.renderProxies();
-        };
-      });
-    }
-
-    tbody.innerHTML = '';
-
-    if (sorted.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" class="text-center">No proxies configured</td></tr>';
-      return;
-    }
-
-    sorted.forEach(proxy => {
-      const row = this.createProxyRow(proxy);
-      tbody.appendChild(row);
+  function renderAgent() {
+    const agent = state.agent || {}; const pending = Number(agent.pending_generation || 0); const applied = Number(agent.applied_generation || 0); const mismatch = pending !== applied;
+    byID('agent-state-value').textContent = text(agent.state); byID('agent-generation-value').textContent = `pending ${pending} / applied ${applied}${mismatch ? ' (mismatch)' : ''}`; byID('agent-ruleset-value').textContent = text(agent.ruleset_hash); byID('agent-reconcile-value').textContent = iso(agent.updated_at);
+    const ipv6 = agent.ipv6_policy === 'deny' ? 'deny-only' : 'unverified/invalid';
+    byID('agent-ipv6-policy-value').textContent = agent.ipv6_policy_verified === true && agent.ipv6_policy === 'deny' ? `${ipv6} (VERIFIED)` : `${ipv6} (not verified)`;
+    const rollback = agent.state === 'ROLLED_BACK' || /rollback|lkg/i.test(agent.last_error || '');
+    byID('agent-lkg-value').textContent = rollback ? `Rollback/LKG signalled: ${text(agent.last_error)}` : 'LKG/rollback fields are not exposed by this API.'; byID('agent-error-value').textContent = text(agent.last_error); byID('agent-state-panel')?.classList.toggle('has-mismatch', mismatch);
+  }
+  function latestReason(mappingID) { const related = state.audits.find((event) => event.entity_id === mappingID); if (!related) return 'No mapping-specific reason reported.'; let payload = related.payload; if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch (_) { payload = {}; } } return payload?.reason_code || payload?.reason || related.action || 'No mapping-specific reason reported.'; }
+  function renderMappings() {
+    const body = byID('mappings-body'); if (!body) return; clearNode(body);
+    if (!state.mappings.length) { const row = document.createElement('tr'); const td = cell(row, 'No mappings configured. Create a draft after validating it.', 'empty'); td.colSpan = 7; body.append(row); return; }
+    state.mappings.forEach((mapping) => {
+      const row = document.createElement('tr'); cell(row, mapping.id, 'monospace'); cell(row, `${mapping.client_id} → ${mapping.proxy_id}`);
+      const desired = document.createElement('td'); desired.append(statusMark(mapping.desired_state)); row.append(desired);
+      cell(row, `desired ${text(mapping.desired_generation)}\napplied ${text(mapping.applied_generation)}`, 'multiline'); cell(row, `desired ${text(mapping.desired_hash)}\napplied ${text(mapping.applied_hash)}`, 'multiline monospace');
+      const plane = document.createElement('td'); plane.append(statusMark(mapping.data_plane_state)); const reason = document.createElement('small'); reason.textContent = latestReason(mapping.id); plane.append(document.createElement('br'), reason); row.append(plane);
+      const actions = document.createElement('td'); actions.className = 'row-actions';
+      if (mapping.desired_state === 'DRAFT' || mapping.desired_state === 'SUSPENDED') actions.append(button('Activate', 'btn btn-primary btn-sm', () => mappingAction(mapping, 'activate')));
+      if (mapping.desired_state === 'ACTIVE') actions.append(button('Suspend', 'btn btn-warning btn-sm', () => mappingAction(mapping, 'suspend')));
+      if (mapping.desired_state !== 'DELETED') actions.append(button('Delete', 'btn btn-outline-danger btn-sm', () => deleteMapping(mapping))); row.append(actions); body.append(row);
     });
   }
-
-  renderProxySummary() {
-    const tbody = document.getElementById('tbody-proxy-summary');
-    if (!tbody) return;
-
-    tbody.innerHTML = '';
-
-    if (this.proxies.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="text-center">No proxies configured</td></tr>';
-      return;
-    }
-
-    this.proxies.forEach(proxy => {
-      const tr = document.createElement('tr');
-      const statusBadge = this.createStatusBadge(proxy.status);
-      const latencyBadge = this.createLatencyBadge(proxy.latency_ms);
-      const lastChecked = proxy.last_checked_at
-        ? new Date(proxy.last_checked_at).toLocaleTimeString()
-        : '—';
-
-      tr.innerHTML = `
-        <td>${proxy.host}:${proxy.port}</td>
-        <td>${statusBadge}</td>
-        <td>${latencyBadge}</td>
-        <td>${proxy.exit_ip || '—'}</td>
-        <td>${lastChecked}</td>
-      `;
-      tbody.appendChild(tr);
-    });
+  function renderProofs() {
+    const body = byID('proxies-body'); if (!body) return; clearNode(body);
+    if (!state.proxies.length) { const row = document.createElement('tr'); const td = cell(row, 'No proxies are available for a control-plane check.', 'empty'); td.colSpan = 6; body.append(row); return; }
+    state.proxies.forEach((proxy) => { const row = document.createElement('tr'); cell(row, proxy.label || proxy.id); cell(row, proxy.status); cell(row, proxy.exit_ip); cell(row, proxy.latency_ms === undefined ? '—' : `${proxy.latency_ms} ms`); cell(row, iso(proxy.last_checked_at)); const actions = document.createElement('td'); actions.append(button('Check egress (control-plane)', 'btn btn-outline-light btn-sm', () => checkProxy(proxy))); row.append(actions); body.append(row); });
   }
-
-  createProxyRow(proxy) {
-    const tr = document.createElement('tr');
-
-    const statusBadge = this.createStatusBadge(proxy.status);
-    const latencyBadge = this.createLatencyBadge(proxy.latency_ms);
-    const lastChecked = proxy.last_checked_at
-      ? new Date(proxy.last_checked_at).toLocaleTimeString()
-      : '—';
-
-    tr.innerHTML = `
-      <td><code>${proxy.id.slice(0, 8)}</code></td>
-      <td>${proxy.type}</td>
-      <td>${proxy.host}:${proxy.port}</td>
-      <td>${statusBadge}</td>
-      <td>${latencyBadge}</td>
-      <td>${proxy.exit_ip || '—'}</td>
-      <td>${lastChecked}</td>
-      <td>
-        <button class="btn btn-sm btn-secondary" onclick="pgw.checkProxyHealth('${proxy.id}')" data-tooltip="Health check">
-          Check
-        </button>
-        <button class="btn btn-sm btn-danger" onclick="pgw.deleteProxy('${proxy.id}')" data-tooltip="Delete proxy">
-          ×
-        </button>
-      </td>
-    `;
-
-    return tr;
+  function auditSummary(payload) { if (!payload) return 'not reported'; let object = payload; if (typeof payload === 'string') { try { object = JSON.parse(payload); } catch (_) { return 'not reported'; } } return [object.generation && `generation ${object.generation}`, object.reason_code || object.reason].filter(Boolean).join(', ') || 'not reported'; }
+  function renderAudit() {
+    const timeline = byID('audit-timeline'); if (!timeline) return; clearNode(timeline); if (!state.audits.length) { const item = document.createElement('li'); item.textContent = 'No audit events returned.'; timeline.append(item); }
+    state.audits.forEach((event) => { const item = document.createElement('li'); const heading = document.createElement('strong'); heading.textContent = `${text(event.action)} by ${text(event.actor)}`; item.append(heading, document.createTextNode(` — ${iso(event.created_at)}; entity ${text(event.entity)} ${text(event.entity_id)}; generation/reason: ${auditSummary(event.payload)}`)); timeline.append(item); }); byID('audit-more').hidden = !state.nextAuditCursor;
   }
-
-  createStatusBadge(status) {
-    const statusClass = {
-      'OK': 'text-bg-success',
-      'DEGRADED': 'text-bg-warning',
-      'DOWN': 'text-bg-danger'
-    }[status] || 'text-bg-secondary';
-
-    return `<span class="badge ${statusClass}">${status || 'Unknown'}</span>`;
-  }
-
-  createLatencyBadge(ms) {
-    if (ms == null || isNaN(ms)) return '—';
-    let cls = 'text-bg-danger';
-    if (ms < 300) cls = 'text-bg-success';
-    else if (ms < 900) cls = 'text-bg-warning';
-    return `<span class="badge ${cls}">${ms}ms</span>`;
-  }
-
-
-  renderMappings() {
-    const tbody = document.getElementById('tbody-mappings');
-    if (!tbody) return;
-    // sort
-    const key = this.mSort, asc = this.mAsc;
-    const val = (m) => {
-      if (key === 'id') return (m.id || '');
-      if (key === 'client') return ((m.client?.ip_cidr) || '');
-      if (key === 'proxy') { const p = m.proxy || {}; return ((p.host || '') + ':' + (p.port ?? '')); }
-      if (key === 'state') return (m.state || '');
-      if (key === 'port') return (m.local_redirect_port ?? 0);
-      return ((m.client?.ip_cidr) || '');
-    };
-    const sorted = (this.mappings || []).slice().sort((a, b) => { const va = val(a), vb = val(b); if (va < vb) return asc ? -1 : 1; if (va > vb) return asc ? 1 : -1; return 0; });
-    // header icons + click
-    const thead = tbody.parentElement?.querySelector('thead');
-    if (thead) {
-      const arrow = asc ? ' \\u25B2' : ' \\u25BC';
-      thead.innerHTML = '<tr>'
-        + '<th data-k="id" class="sortable">ID' + (key === 'id' ? arrow : '') + '</th>'
-        + '<th data-k="client" class="sortable">Client IP/CIDR' + (key === 'client' ? arrow : '') + '</th>'
-        + '<th data-k="proxy" class="sortable">Proxy Server' + (key === 'proxy' ? arrow : '') + '</th>'
-        + '<th data-k="state" class="sortable">State' + (key === 'state' ? arrow : '') + '</th>'
-        + '<th data-k="port" class="sortable">Local Port' + (key === 'port' ? arrow : '') + '</th>'
-        + '<th>Actions</th>'
-        + '</tr>';
-      thead.querySelectorAll('th.sortable').forEach((th) => {
-        th.style.cursor = 'pointer'; th.onclick = () => {
-          const k = th.getAttribute('data-k');
-          if (this.mSort === k) this.mAsc = !this.mAsc; else { this.mSort = k; this.mAsc = true; }
-          localStorage.setItem('pgw_sort_m2', JSON.stringify({ k: this.mSort, a: this.mAsc }));
-          this.renderMappings();
-        };
-      });
-    }
-
-    tbody.innerHTML = '';
-
-    if (sorted.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center">No mappings configured</td></tr>';
-      return;
-    }
-
-    sorted.forEach(mapping => {
-      const row = this.createMappingRow(mapping);
-      tbody.appendChild(row);
-    });
-  }
-
-  createMappingRow(mapping) {
-    const tr = document.createElement('tr');
-
-    const proxyAddress = mapping.proxy
-      ? `${mapping.proxy.host}:${mapping.proxy.port}`
-      : '—';
-
-    const stateBadge = this.createStatusBadge(mapping.state || 'PENDING');
-
-    tr.innerHTML = `
-      <td><code>${mapping.id.slice(0, 8)}</code></td>
-      <td>${mapping.client?.ip_cidr || '—'}</td>
-      <td>${proxyAddress}</td>
-      <td>${stateBadge}</td>
-      <td>${mapping.local_redirect_port || '—'}</td>
-      <td>
-        <button class="btn btn-sm btn-danger" onclick="pgw.deleteMapping('${mapping.id}')">
-          Delete
-        </button>
-      </td>
-    `;
-
-    return tr;
-  }
-
-  renderClients() {
-    const select = document.getElementById('select-proxy');
-    if (!select) return;
-
-    select.innerHTML = '<option value="">Select proxy server...</option>';
-
-    const used = new Set((this.mappings || []).map(m => m && m.proxy ? m.proxy.id : null).filter(Boolean));
-    const available = (this.proxies || []).filter(p => !used.has(p.id));
-
-    if (!available || available.length === 0) {
-      const opt = document.createElement('option');
-      opt.disabled = true;
-      opt.textContent = 'No available proxies (all mapped)';
-      select.appendChild(opt);
-      return;
-    }
-
-    available.forEach(proxy => {
-      const option = document.createElement('option');
-      option.value = proxy.id;
-      const statusIndicator = proxy.status === 'OK' ? '✓' : proxy.status === 'DEGRADED' ? '⚠' : '✗';
-      option.textContent = `${statusIndicator} ${proxy.host}:${proxy.port} (${proxy.type})`;
-      select.appendChild(option);
-    });
-  }
-  detectProxyType(originalLine, host, port) {
-    // Check for explicit type prefix
-    if (originalLine.includes("socks5://")) return "socks5";
-    if (originalLine.includes("http://")) return "http";
-
-    // Auto-detect based on common SOCKS5 ports
-    const socksCommonPorts = [1080, 9050, 9150];
-    if (socksCommonPorts.includes(port)) return "socks5";
-
-    // Default to HTTP
-    return "http";
-  }
-
-  parseProxyLine(line) {
-    const cleanLine = line.replace(/^(https?|socks5):\/\//, ''); const m = cleanLine.trim().match(/^([^:\s]+):(\d{1,5}):([^:]*):([^:]*)$/);
-    if (!m) return null;
-    const host = m[1];
-    const port = parseInt(m[2], 10);
-    const username = m[3] || "";
-    const password = m[4] || "";
-    if (!host || !port || port <= 0 || port > 65535) return null;
-    return { type: this.detectProxyType(line, host, port), host, port, username, password, enabled: true };
-  }
-
-  async importProxies() {
-    const textarea = document.getElementById("import-proxies");
-    if (!textarea) return;
-    const raw = textarea.value || "";
-    const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    if (lines.length === 0) {
-      this.showAlert("No proxies to import", "warning");
-      return;
-    }
-
-    let ok = 0, skipped = 0;
-    for (const [idx, line] of lines.entries()) {
-      if (line.startsWith("#")) { skipped++; continue; }
-      const data = this.parseProxyLine(line);
-      if (!data) { skipped++; continue; }
-      try {
-        const created = await this.apiCall(`${this.apiBase}/v1/proxies`, { method: "POST", body: JSON.stringify(data) });
-        ok++;
-        setTimeout(() => this.checkProxyHealth(created.id), 500);
-      } catch (e) {
-        console.error("Import failed for line", idx + 1, line, e);
-        skipped++;
-      }
-    }
-
-    this.showAlert(`Imported ${ok} proxies${skipped ? `, skipped ${skipped}` : ""}`, ok > 0 ? "success" : "warning");
-    if (ok > 0) this.loadData();
-  }
-
-
-  updateCounts() {
-    this.updateElement('proxy-count', `${this.proxies.length} proxies`);
-    this.updateElement('mapping-count', `${this.mappings.length} mappings`);
-  }
-
-  async createProxy() {
-    const form = document.getElementById('form-proxy');
-    const formData = new FormData(form);
-
-    const proxyData = {
-      type: formData.get('type'),
-      host: formData.get('host'),
-      port: parseInt(formData.get('port')),
-      username: formData.get('username') || '',
-      password: formData.get('password') || '',
-      enabled: true
-    };
-
+  function renderSummary() { byID('summary-proxies').textContent = String(state.proxies.length); byID('summary-mappings').textContent = String(state.mappings.length); byID('summary-verified').textContent = String(state.mappings.filter((item) => item.data_plane_state === 'VERIFIED').length); byID('summary-refreshed').textContent = new Date().toLocaleTimeString(); }
+  function render() { fillMappingForm(); renderSummary(); renderAgent(); renderMappings(); renderProofs(); renderAudit(); }
+  async function loadAll() {
+    state.loadController?.abort();
+    const controller = new AbortController(); state.loadController = controller; const epoch = ++state.loadEpoch;
+    announce('Refreshing control-plane data…');
     try {
-      const newProxy = await this.apiCall(`${this.apiBase}/v1/proxies`, {
-        method: 'POST',
-        body: JSON.stringify(proxyData)
-      });
-
-      this.showAlert('Proxy created successfully', 'success');
-      form.reset();
-      this.loadData();
-
-      // Auto health check the new proxy
-      setTimeout(() => this.checkProxyHealth(newProxy.id), 1000);
-
-    } catch (error) {
-      console.error('Failed to create proxy:', error);
-    }
+      const [proxies, clients, policies, mappings, agent, audits] = await Promise.all([loadPaged('proxies', controller.signal), loadPaged('clients', controller.signal), loadPaged('egress-policies', controller.signal), loadPaged('mappings', controller.signal), request(`${API}/agent/state`, { signal: controller.signal }), request(`${API}/audit-events?limit=50`, { signal: controller.signal })]);
+      if (controller.signal.aborted || epoch !== state.loadEpoch) return;
+      state.proxies = itemList(proxies); state.clients = itemList(clients); state.policies = itemList(policies); state.mappings = itemList(mappings); state.agent = agent; state.audits = itemList(audits); state.nextAuditCursor = audits?.next_cursor || ''; render(); announce('Control-plane data refreshed.');
+    } catch (error) { if (!controller.signal.aborted && epoch === state.loadEpoch) announce(error.message || 'Unable to load control-plane data.', true); }
+    finally { if (epoch === state.loadEpoch) state.loadController = null; }
   }
-
-  async createMapping() {
-    const form = document.getElementById('form-mapping');
-    const formData = new FormData(form);
-
-    const clientIP = (formData.get('client_ip') || '').trim();
-    const proxyId = formData.get('proxy_id');
-
-    // Frontend validation: IPv4 only, forbid CIDR
-    const ipv4Re = /^(25[0-5]|2[0-4]\d|[01]?\d\d?)\.(25[0-5]|2[0-4]\d|[01]?\d\d?)\.(25[0-5]|2[0-4]\d|[01]?\d\d?)\.(25[0-5]|2[0-4]\d|[01]?\d\d?)$/;
-    if (clientIP.includes('/')) {
-      this.showAlert('CIDR is not allowed. Please enter a single IPv4 address (e.g., 192.168.2.3).', 'warning');
-      return;
-    }
-    if (clientIP && !ipv4Re.test(clientIP)) {
-      this.showAlert('Invalid IPv4 address format.', 'warning');
-      return;
-    }
-
-    if (!clientIP || !proxyId) {
-      this.showAlert('Please fill all required fields', 'warning');
-      return;
-    }
-
-    try {
-      // First create client if not exists
-      let clientId;
-      const existingClient = this.clients.find(c => c.ip_cidr === `${clientIP}/32`);
-
-      if (existingClient) {
-        clientId = existingClient.id;
-      } else {
-        const client = await this.apiCall(`${this.apiBase}/v1/clients`, {
-          method: 'POST',
-          body: JSON.stringify({
-            ip_cidr: clientIP, // API will auto-add /32
-            enabled: true
-          })
-        });
-        clientId = client.id;
-      }
-
-      // Create mapping
-      await this.apiCall(`${this.apiBase}/v1/mappings`, {
-        method: 'POST',
-        body: JSON.stringify({
-          client_id: clientId,
-          proxy_id: proxyId
-        })
-      });
-
-      this.showAlert('Mapping created successfully', 'success');
-      form.reset();
-      this.loadData();
-
-      // Auto reconcile after creating mapping
-      setTimeout(() => this.reconcileRules(), 1000);
-
-    } catch (error) {
-      console.error('Failed to create mapping:', error);
-    }
+  async function loadMoreAudit() { if (!state.nextAuditCursor) return; try { const page = await request(`${API}/audit-events?limit=50&cursor=${encodeURIComponent(state.nextAuditCursor)}`); state.audits.push(...itemList(page)); state.nextAuditCursor = page?.next_cursor || ''; renderAudit(); announce('More audit events loaded.'); } catch (error) { announce(error.message || 'Unable to load audit events.', true); } }
+  async function createMapping(event) {
+    event.preventDefault(); const preview = validatePreview(); if (!preview.valid) { announce('Correct the validation issues before creating a draft.', true); return; }
+    try { let client = state.clients.find((item) => item.ip_cidr === preview.normalized); if (!client) client = await mutation('POST', `${API}/clients`, undefined, { id: idKey('client'), ip_cidr: preview.normalized, enabled: true }); await mutation('POST', `${API}/mappings`, undefined, { id: idKey('mapping'), client_id: client.id, proxy_id: preview.proxyID, policy_id: preview.policyID, local_redirect_port: preview.port }); byID('mapping-form')?.reset(); await loadAll(); announce('Draft mapping created. Activate it explicitly after review.'); } catch (error) { announce(error.message || 'Unable to create draft mapping.', true); }
   }
-
-  async checkProxyHealth(proxyId) {
-    try {
-      await this.apiCall(`${this.apiBase}/v1/proxies/${proxyId}/check`, {
-        method: 'POST'
-      });
-
-      this.showAlert('Health check completed', 'success');
-      this.loadData();
-    } catch (error) {
-      console.error('Health check failed:', error);
-    }
-  }
-
-  async healthCheckAll() {
-    if (this.proxies.length === 0) {
-      this.showAlert('No proxies to check', 'warning');
-      return;
-    }
-
-    this.showAlert('Running health checks...', 'info');
-
-    const checkPromises = this.proxies.map(proxy =>
-      this.checkProxyHealth(proxy.id).catch(e => console.error(`Health check failed for ${proxy.id}:`, e))
-    );
-
-    try {
-      await Promise.all(checkPromises);
-      this.showAlert('All health checks completed', 'success');
-    } catch (error) {
-      console.error('Some health checks failed:', error);
-    }
-  }
-
-  async deleteProxy(proxyId) {
-    if (!confirm('Are you sure you want to delete this proxy? This will also remove any associated mappings.')) {
-      return;
-    }
-
-    try {
-      await this.apiCall(`${this.apiBase}/v1/proxies/${proxyId}`, {
-        method: 'DELETE'
-      });
-
-      this.showAlert('Proxy deleted successfully', 'success');
-      this.loadData();
-    } catch (error) {
-      console.error('Failed to delete proxy:', error);
-    }
-  }
-
-  async deleteMapping(mappingId) {
-    if (!confirm('Are you sure you want to delete this mapping?')) {
-      return;
-    }
-
-    try {
-      await this.apiCall(`${this.apiBase}/v1/mappings/${mappingId}`, {
-        method: 'DELETE'
-      });
-
-      this.showAlert('Mapping deleted successfully', 'success');
-      this.loadData();
-
-      // Auto reconcile after deleting mapping
-      setTimeout(() => this.reconcileRules(), 1000);
-
-    } catch (error) {
-      console.error('Failed to delete mapping:', error);
-    }
-  }
-
-  async reconcileRules() {
-    try {
-      const response = await fetch(`${this.agentBase}/reconcile`);
-
-      if (response.ok) {
-        this.showAlert('Rules reconciled successfully', 'success');
-        this.updateElement('last-reconcile', new Date().toLocaleTimeString());
-        this.loadData();
-      } else {
-        throw new Error('Reconcile failed');
-      }
-    } catch (error) {
-      console.error('Reconcile failed:', error);
-      this.showAlert('Failed to reconcile rules', 'danger');
-    }
-  }
-
-  exportProxies() {
-    if (this.proxies.length === 0) {
-      this.showAlert('No proxies to export', 'warning');
-      return;
-    }
-
-    const csvContent = [
-      'ID,Type,Host,Port,Status,Latency,Exit IP,Last Check',
-      ...this.proxies.map(p => [
-        p.id,
-        p.type,
-        p.host,
-        p.port,
-        p.status || 'Unknown',
-        p.latency_ms || '',
-        p.exit_ip || '',
-        p.last_checked_at || ''
-      ].join(','))
-    ].join('\n');
-
-    this.downloadFile(csvContent, 'pgw-proxies.csv', 'text/csv');
-  }
-
-  exportMappings() {
-    if (this.mappings.length === 0) {
-      this.showAlert('No mappings to export', 'warning');
-      return;
-    }
-
-    const csvContent = [
-      'ID,Client IP,Proxy Host,Proxy Port,State,Local Port',
-      ...this.mappings.map(m => [
-        m.id,
-        m.client?.ip_cidr || '',
-        m.proxy?.host || '',
-        m.proxy?.port || '',
-        m.state || 'PENDING',
-        m.local_redirect_port || ''
-      ].join(','))
-    ].join('\n');
-
-    this.downloadFile(csvContent, 'pgw-mappings.csv', 'text/csv');
-  }
-
-  downloadFile(content, filename, mimeType) {
-    const blob = new Blob([content], { type: mimeType });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-
-    this.showAlert(`${filename} downloaded`, 'success');
-  }
-
-  showAlert(message, type = 'info') {
-    const container = document.getElementById('alerts');
-    if (!container) return;
-
-    // Ensure container is overlay and toast-ready (CSS handles positioning)
-    container.classList.add('toast-stack');
-
-    const bsType = ['success', 'danger', 'warning', 'info', 'primary', 'secondary'].includes(type) ? type : 'info';
-    const toast = document.createElement('div');
-    toast.className = `toast align-items-center text-bg-${bsType} border-0`;
-    toast.setAttribute('role', 'alert');
-    toast.setAttribute('aria-live', 'assertive');
-    toast.setAttribute('aria-atomic', 'true');
-
-    const inner = document.createElement('div');
-    inner.className = 'd-flex';
-    const body = document.createElement('div');
-    body.className = 'toast-body';
-    body.textContent = message;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn-close btn-close-white me-2 m-auto';
-    btn.setAttribute('data-bs-dismiss', 'toast');
-    btn.setAttribute('aria-label', 'Close');
-
-    inner.appendChild(body);
-    inner.appendChild(btn);
-    toast.appendChild(inner);
-
-    container.appendChild(toast);
-
-    const inst = bootstrap.Toast.getOrCreateInstance(toast, { delay: 3500 });
-    inst.show();
-    toast.addEventListener('hidden.bs.toast', () => toast.remove());
-  }
-
-  showLoading(show) {
-    const loadingEl = document.getElementById('loading-indicator');
-    if (loadingEl) {
-      loadingEl.style.display = show ? 'flex' : 'none';
-    }
-  }
-
-  updateElement(id, value) {
-    const element = document.getElementById(id);
-    if (element) {
-      element.textContent = value;
-    }
-  }
-
-  updateLastRefresh() {
-    this.updateElement('last-refresh', new Date().toLocaleTimeString());
-  }
-}
-
-// Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-  window.pgw = new PGWManager();
-});
-
-// Set active navigation
-document.addEventListener('DOMContentLoaded', () => {
-  const currentPath = window.location.pathname;
-  const navLinks = document.querySelectorAll('.nav-link');
-
-  navLinks.forEach(link => {
-    link.classList.remove('active');
-    if (link.getAttribute('href') === currentPath) {
-      link.classList.add('active');
-    }
-  });
-});
+  async function mappingAction(mapping, action) { try { await mutation('POST', `${API}/mappings/${encodeURIComponent(mapping.id)}/${action}`, mappingVersion(mapping), {}); await loadAll(); announce(`Mapping ${action} requested.`); } catch (error) { if (error.status === 409 || error.status === 412) { await loadAll(); announce('This mapping changed elsewhere; data was reloaded before retrying.', true); } else announce(error.message || `Unable to ${action} mapping.`, true); } }
+  async function deleteMapping(mapping) { if (!window.confirm(`Delete mapping ${mapping.id}? This removes its redirect after drain.`)) return; try { await mutation('DELETE', `${API}/mappings/${encodeURIComponent(mapping.id)}`, mappingVersion(mapping)); await loadAll(); announce('Mapping delete requested.'); } catch (error) { if (error.status === 409 || error.status === 412) { await loadAll(); announce('This mapping changed elsewhere; data was reloaded before retrying.', true); } else announce(error.message || 'Unable to delete mapping.', true); } }
+  async function checkProxy(proxy) { try { await request(`${CONTROL_PLANE_CHECK}${encodeURIComponent(proxy.id)}/check`, { method: 'POST' }); await loadAll(); announce('Proxy control-plane check completed. This is not proof that a mapping is applied or verified.'); } catch (error) { announce(error.message || 'Proxy control-plane check failed.', true); } }
+  async function logout() { try { await request('/logout', { method: 'POST' }); } catch (_) { /* cookie clearance is authoritative */ } window.location.assign('/login'); }
+  function bind() { byID('refresh')?.addEventListener('click', loadAll); byID('mapping-preview-button')?.addEventListener('click', validatePreview); byID('mapping-form')?.addEventListener('submit', createMapping); byID('audit-more')?.addEventListener('click', loadMoreAudit); byID('logout')?.addEventListener('click', logout); ['mapping-client-ip', 'mapping-proxy', 'mapping-policy', 'mapping-port'].forEach((id) => byID(id)?.addEventListener('input', () => { byID('mapping-preview').textContent = 'Preview updates when requested.'; })); }
+  document.addEventListener('DOMContentLoaded', () => { bind(); loadAll(); });
+})();

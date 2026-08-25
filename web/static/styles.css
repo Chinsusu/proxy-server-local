@@ -1,7 +1,5 @@
 /* PGW Dashboard - Dark Mode OLED (AI-Generated Design System) */
 
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
-
 :root {
   /* Dark Mode OLED Color Palette */
   --primary: #0F172A;
@@ -354,3 +352,71 @@ html[data-bs-theme="dark"] .text-muted {
 #alerts .toast {
   pointer-events: auto;
 }#loading-indicator { display: none !important; align-items: center; gap: .5rem; }
+
+/* V2 control-plane workflow: semantic state is always communicated in text,
+   not colour alone. These rules intentionally work with the existing vanilla
+   markup and Bootstrap primitives. */
+.skip-link {
+  position: fixed; z-index: 2000; left: 1rem; top: -4rem;
+  padding: .6rem .9rem; border-radius: .35rem; background: #fff; color: #111827;
+}
+.skip-link:focus { top: 1rem; }
+:focus-visible { outline: 3px solid #7dd3fc !important; outline-offset: 3px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.summary-grid, .status-grid, .form-grid {
+  display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+.summary-grid .stat-value { display: block; font-size: 1.55rem; margin-top: .25rem; }
+.status-grid { margin: 0; }
+.status-grid dt { color: #cbd5e1; font-weight: 600; }
+.status-grid dd { margin: .15rem 0 0; overflow-wrap: anywhere; }
+.form-grid > div { min-width: 0; }
+.field-error { min-height: 1.25rem; color: #fca5a5; font-weight: 600; }
+.validation-preview { border: 1px solid #64748b; border-radius: .45rem; padding: .8rem 1rem; background: #0f172a; }
+.validation-preview.validation-failed { border-color: #f87171; }
+.validation-preview ul { margin: .5rem 0 0; }
+.status-mark { display: inline-block; border: 1px solid currentColor; border-radius: 999px; padding: .15rem .45rem; font-size: .78rem; font-weight: 700; letter-spacing: .02em; }
+.state-verified, .state-active, .state-ok { color: #6ee7b7; }
+.state-failed, .state-down, .state-deleted { color: #fca5a5; }
+.state-unknown, .state-draft, .state-suspended, .state-degraded { color: #fcd34d; }
+.has-mismatch { border-color: #fcd34d !important; box-shadow: 0 0 0 1px #fcd34d; }
+.multiline { white-space: pre-line; overflow-wrap: anywhere; }
+.row-actions { display: flex; flex-wrap: wrap; gap: .4rem; min-width: 11rem; }
+.audit-timeline { margin: 0 0 1rem; padding-left: 1.25rem; }
+.audit-timeline li { margin-bottom: .65rem; overflow-wrap: anywhere; }
+.empty { text-align: center; color: #cbd5e1; padding: 1.5rem !important; }
+@media (max-width: 767px) {
+  .container { padding-left: 1rem; padding-right: 1rem; }
+  .table-responsive { font-size: .875rem; }
+  .row-actions { min-width: 9rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}
+
+/* Local primitives replace external framework assets on the management UI. */
+.container { width: min(100% - 2rem, 1180px); margin-inline: auto; }
+.card-body, .card-header { padding: 1rem; }
+.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 2.5rem; padding: .45rem .8rem; border: 1px solid #94a3b8; border-radius: .35rem; background: transparent; color: #f8fafc; font: inherit; cursor: pointer; text-decoration: none; }
+.btn-primary { background: #166534; border-color: #86efac; color: #fff; }
+.btn-warning { background: #854d0e; border-color: #fcd34d; color: #fff; }
+.btn-outline-danger { border-color: #fca5a5; color: #fecaca; }
+.btn-outline-light { border-color: #cbd5e1; color: #f8fafc; }
+.btn-sm { min-height: 2rem; padding: .25rem .55rem; font-size: .875rem; }
+.form-label { display: block; margin-bottom: .35rem; font-weight: 600; }
+.form-control, .form-select { display: block; box-sizing: border-box; width: 100%; min-height: 2.5rem; padding: .45rem .55rem; border: 1px solid #94a3b8; border-radius: .35rem; color: #f8fafc; background: #111827; font: inherit; }
+.form-text, .text-muted { color: #cbd5e1 !important; }
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td { padding: .7rem; text-align: left; vertical-align: top; border-bottom: 1px solid #334155; }
+.table-striped tbody tr:nth-child(odd) { background: rgba(148, 163, 184, .08); }
+.table-responsive { overflow-x: auto; }
+.d-flex { display: flex; } .flex-wrap { flex-wrap: wrap; } .gap-2 { gap: .5rem; } .gap-3 { gap: 1rem; } .align-items-center { align-items: center; } .justify-content-between { justify-content: space-between; }
+.py-3 { padding-block: 1rem; } .py-4 { padding-block: 1.5rem; } .mb-0 { margin-bottom: 0; } .mb-2 { margin-bottom: .5rem; } .mb-4 { margin-bottom: 1.5rem; } .mt-3 { margin-top: 1rem; } .ms-2 { margin-left: .5rem; }
+.h3 { font-size: 1.75rem; } .h5 { font-size: 1.2rem; } .h6 { font-size: 1rem; }
+.border-bottom { border-bottom: 1px solid #334155; }
+.login-shell { width: min(100% - 2rem, 29rem); margin: 5rem auto; }
+.login-card { padding: 1.5rem; }
+.login-card form { display: grid; gap: 1rem; }

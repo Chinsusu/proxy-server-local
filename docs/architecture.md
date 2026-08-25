@@ -1,69 +1,64 @@
-# Kiến trúc hệ thống
+# PGW v2 architecture
 
-## Thành phần
+## Trust boundaries
 
-- **pgw-api (:8080)**: CRUD proxies/clients/mappings; health-check; telemetry.
-- **pgw-agent (:9090/agent)**: gọi API `/v1/mappings/active` → render script `nft` → `nft -f -`.
-- **pgw-fwd (per-port, ví dụ :15001, :15002)**: TCP listener; transparent CONNECT (+SNI log ẩn PII); nối upstream proxy.
-- **pgw-ui (:8081)**: giao diện web; reverse proxy `/api/*`→API, `/agent/*`→Agent.
+- `pgw-ui`: HTTPS presentation and proxy to public API routes; no Agent access.
+- `pgw-api`: domain transactions, SQLite, encryption and audit; no nftables or
+  systemd authority.
+- `pgw-agent`: only application service with `CAP_NET_ADMIN`; sole dynamic
+  nftables writer and Forwarder lifecycle manager.
+- `pgw-fwd@<port>`: unprivileged TCP proxy adapter with per-instance systemd
+  credentials.
+- `pgw-health`: read-only health observer.
 
-## nftables sinh ra
+API and Agent use `/run/pgw/control/api-agent.sock`, protected by filesystem
+group and a scoped service token. Internal Agent endpoints are never exposed on
+TCP. UI talks only to API with a separate proxy identity token.
 
-```nft
-table ip pgw {
-  chain prerouting {
-    type nat hook prerouting priority dstnat; policy accept;
-    # cho từng client /32 (hoặc tập hợp nếu về sau mở rộng):
-    iifname "ens19" ip saddr 192.168.2.3/32 tcp dport {80,443} redirect to :15001
-    # ...
-  }
-}
+## State model
 
-table inet pgw_filter {
-  chain forward {
-    type filter hook forward priority filter; policy accept;
-    ct state established,related accept
+SQLite stores proxies, encrypted secrets, clients, policies, mappings, nodes,
+reconcile state, idempotency keys and append-only audit events. Every active
+mapping contains desired state, generation, proxy/credential revisions and a
+local redirect port. JSON is import/export only.
 
-    # chặn toàn bộ IPv6 LAN→WAN
-    iifname "ens19" oifname "eth0" meta nfproto ipv6 drop
+Agent fetches an immutable snapshot, validates it, compares its canonical hash,
+prepares required runtime, checks the nft candidate, applies one dynamic-table
+transaction, reads back the semantic hash, atomically saves LKG, then ACKs. One
+worker coalesces pending generations with `pending=max`; reconciles never run in
+parallel.
 
-    # chặn leak ra WAN & chặn UDP từ client
-    ip saddr 192.168.2.3/32 oifname "eth0" drop
-    ip saddr 192.168.2.3/32 meta l4proto udp drop
-    # ...
-  }
+## Fail-close data plane
 
-  chain input {
-    type filter hook input priority filter; policy accept;
+`inet pgw_base` is static boot infrastructure. It blocks all LAN→WAN forwarding
+unless traffic is consumed by a verified local redirect; UDP and IPv6 remain
+blocked by current policy. Agent must not flush or replace the base table.
+Management accepts are explicitly IPv4 and limited to the configured LAN and
+loopback. The IPv6 management drop precedes every accept, and non-LAN IPv4 is
+explicitly denied.
 
-    # mở DNS (53) từ LAN vào gateway
-    iifname "ens19" ip saddr 192.168.2.3/32 udp dport 53 accept
-    iifname "ens19" ip saddr 192.168.2.3/32 tcp dport 53 accept
+The dynamic table contains only current source mappings and TCP redirects.
+Forwarder readiness is systemd `Type=notify`; a TCP probe against the transparent
+listener is forbidden. Credential rotation or spec revision causes a protected
+runtime replacement before redirect publication.
 
-    # mở cổng forwarder
-    iifname "ens19" ip saddr 192.168.2.3/32 tcp dport 15001 accept
+## Runtime recovery
 
-    # chặn mọi kết nối LAN→các cổng forwarder không nằm trong whitelist per-client
-    iifname "ens19" tcp dport 15001-15999 drop
-  }
-}
-```
+LKG lives in `/var/lib/pgw/rules`. Before destructive runtime replacement Agent
+writes and fsyncs a checksum-bound, non-secret transition journal. Same-process
+failure restores the old runtime and LKG before ACK. Startup recovery either
+restores a valid protected `/run` restore point or quarantines affected redirects
+and rebuilds desired state; it never claims rollback without verification.
 
-> Tên interface: `ens19` (LAN), `eth0` (WAN) có thể chỉnh bằng env Agent.
+## Privilege and lifecycle
 
-## Ràng buộc /32
+Static users isolate API, Agent, Forwarder, UI and health. Agent has only
+`CAP_NET_ADMIN`; narrow polkit permits start/stop/restart only for validated
+Forwarder instance units. Secrets arrive through systemd credentials.
 
-* API chỉ chấp nhận `ip_cidr` với prefix **= 32**. Nếu người dùng nhập IP không có `/`, API tự chuyển thành `/32`. Nếu prefix `< 32` trả 400.
-
-## Hành vi mặc định (từ v1.1)
-
-> Agent sinh rule cho mapping ở trạng thái **APPLIED hoặc PENDING**; FAILED sẽ không có rule (đường bị đóng).
-
-> Agent fetch tất cả mappings qua `GET /v1/mappings` (không phải `/v1/mappings/active`). Forwarder mới dùng `/v1/mappings/active` để resolve upstream theo port.
-
-- Mô hình 1 cổng ↔ 1 client: mỗi client có một cổng forwarder riêng; nếu cùng một client tạo thêm mapping, sẽ tái sử dụng chính cổng đó. API tự gán cổng theo client (tái sử dụng nếu có, cấp mới nếu chưa có, trong khoảng 15001..15999 hoặc theo PGW_FWD_BASE_PORT/PGW_FWD_MAX_PORT). Lần đầu dùng cổng, API sẽ cố gắng start `pgw-fwd@<port>`, tạo file cờ `/var/lib/pgw/ports/<port>`, gọi Agent `reconcile`, và đánh dấu **APPLIED** khi hợp lệ.
-- Khi xoá Mapping, API sẽ: nếu không còn mapping nào dùng cùng `port` đó thì xoá file cờ tương ứng và gọi `systemctl stop pgw-fwd@<port>` (an toàn nếu unit không tồn tại). Cuối cùng luôn gọi Agent `reconcile` để đồng bộ nftables.
-
-
-Lưu ý (an toàn): Chỉ apply mapping sau khi kiểm tra health của proxy thành công (OK/DEGRADED).
-Nếu health thất bại, mapping ở trạng thái FAILED và sẽ không khởi động forwarder/cấp rule.
+The reviewed installer is the only supported publisher. It serializes all
+lifecycle operations, quiesces writers/Forwarders before DB/UDS changes, and
+restores files, rules, forwarding and exact service state on failure. It forces
+`net.ipv4.ip_forward=0` before every mutation and recovery step; saved forwarding
+is restored only after exact nft semantic readback, service readiness, binary
+identity, and snapshot metadata verification succeed.

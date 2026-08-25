@@ -1,22 +1,53 @@
 [Unit]
-Description=PGW UI
+Description=PGW management UI
 After=network-online.target pgw-api.service
 Wants=network-online.target
+Requires=pgw-api.service
 
 [Service]
-User=pgw
-Group=pgw
+User=pgw-ui
+Group=pgw-ui
 EnvironmentFile=/etc/pgw/pgw.env
+# Keep Ubuntu 22.04/systemd 249 compatibility without exposing secret bytes.
+Environment=PGW_UI_TLS_CERT_FILE=/run/credentials/pgw-ui.service/ui_tls_cert
+Environment=PGW_UI_TLS_KEY_FILE=/run/credentials/pgw-ui.service/ui_tls_key
+Environment=PGW_UI_WEB_DIR=/usr/local/share/pgw/web
+LoadCredential=ui_tls_cert:/etc/pgw/credentials-current/ui.crt
+LoadCredential=ui_tls_key:/etc/pgw/credentials-current/ui.key
+LoadCredential=ui_proxy_token:/etc/pgw/credentials-current/ui_proxy_token
+ExecStartPre=/usr/local/sbin/pgw-verify-ui-bind
 ExecStart=/usr/local/bin/pgw-ui
-Restart=always
+Restart=on-failure
 RestartSec=2s
-
-# Resource Limits
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ReadOnlyPaths=/usr/local/share/pgw/web
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 LimitNOFILE=16384
 MemoryMax=128M
 TasksMax=1024
-
-# Logging
 StandardOutput=journal
 StandardError=journal
 

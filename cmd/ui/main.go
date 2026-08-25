@@ -1,95 +1,21 @@
 package main
 
 import (
-	"context"
-	"encoding/base64"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
-
-	"github.com/Chinsusu/proxy-server-local/pkg/config"
-	"log"
-	"encoding/json"
-	"time"
-	"github.com/Chinsusu/proxy-server-local/pkg/auth"
 )
 
 var (
-	baseAPI   string
-	jwtSecret string
-	baseAgent string
-	webDir    string
+	// webDir is kept only for the legacy embedded-template helpers below.
+	// Production routing is owned by secureUIServer in server.go.
+	webDir string
 )
 
 func main() {
-	cfg := config.LoadUI()
-	addr := cfg.Addr
-	if strings.TrimSpace(addr) == "" {
-		addr = ":8081"
-	}
-
-	// Get upstream services from ENV
-	baseAPI = strings.TrimSpace(os.Getenv("PGW_UI_API"))
-	if baseAPI == "" {
-		baseAPI = "http://127.0.0.1:8080"
-	}
-
-	baseAgent = strings.TrimSpace(os.Getenv("PGW_UI_AGENT"))
-	if baseAgent == "" {
-		baseAgent = "http://127.0.0.1:9090/agent"
-	}
-
-	jwtSecret = cfg.JWTSecret
-
-	// Determine web directory path
-	webDir = "/opt/proxy-server-local/web"
-	if _, err := os.Stat(webDir); os.IsNotExist(err) {
-		// Fallback to embedded templates if web directory doesn't exist
-		webDir = ""
-	}
-
-	// Setup routes
-	http.HandleFunc("/", handleRoot)
-	http.HandleFunc("/manage", handleManage)
-	http.HandleFunc("/proxies", handleProxies)
-	http.HandleFunc("/login", handleLogin)
-	http.HandleFunc("/logout", handleLogout)
-	http.HandleFunc("/static/", handleStatic)
-
-	// API proxy
-	http.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		proxyRequest(w, r, "/api/", baseAPI)
-	})
-
-	// Agent proxy
-	http.HandleFunc("/agent/", func(w http.ResponseWriter, r *http.Request) {
-		proxyRequest(w, r, "/agent/", baseAgent)
-	})
-
-	server := &http.Server{Addr: addr}
-
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-		sig := <-sigCh
-		log.Printf("[INFO] received %s, shutting down...", sig)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
-			log.Printf("[ERROR] shutdown: %v", err)
-		}
-	}()
-
-	log.Printf("[INFO] pgw-ui listening on %s (API=%s, AGENT=%s)",
-		addr, baseAPI, baseAgent)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("[ERROR] Failed to start server: %v", err)
-	}
+	runSecureUI()
 }
 
 func getCurrentDir() string {
@@ -104,17 +30,26 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if !uiAuthorized(r) { http.Redirect(w, r, "/login", http.StatusFound); return }
+	if !uiAuthorized(r) {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
 	serveHTML(w, r, "dashboard.html")
 }
 
 func handleProxies(w http.ResponseWriter, r *http.Request) {
-	if !uiAuthorized(r) { http.Redirect(w, r, "/login", http.StatusFound); return }
+	if !uiAuthorized(r) {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
 	serveHTML(w, r, "proxies.html")
 }
 
 func handleManage(w http.ResponseWriter, r *http.Request) {
-	if !uiAuthorized(r) { http.Redirect(w, r, "/login", http.StatusFound); return }
+	if !uiAuthorized(r) {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
 	serveHTML(w, r, "manage.html")
 }
 
@@ -174,8 +109,8 @@ func serveEmbeddedHTML(w http.ResponseWriter, r *http.Request, filename string) 
 		io.WriteString(w, embeddedDashboard)
 	case "manage.html":
 		io.WriteString(w, embeddedManage)
-    case "proxies.html":
-        io.WriteString(w, embeddedProxies)
+	case "proxies.html":
+		io.WriteString(w, embeddedProxies)
 	default:
 		http.NotFound(w, r)
 	}
@@ -187,122 +122,41 @@ func serveEmbeddedStatic(w http.ResponseWriter, r *http.Request, filename string
 		w.Header().Set("Content-Type", "text/css")
 		io.WriteString(w, embeddedCSS)
 	case "app.js":
-		w.Header().Set("Content-Type", "application/javascript")
-		data, err := base64.StdEncoding.DecodeString(embeddedJSBase64)
-		if err != nil {
-			http.Error(w, "embedded js decode error", http.StatusInternalServerError)
-			return
-		}
-		_, _ = w.Write(data)
+		// The production installer supplies web/static/app.js. Do not fall back
+		// to the retired embedded bundle because it exposed the legacy Agent
+		// control route.
+		http.Error(w, "static assets unavailable", http.StatusServiceUnavailable)
 	default:
 		http.NotFound(w, r)
 	}
 }
 
 func proxyRequest(w http.ResponseWriter, r *http.Request, prefix, upstream string) {
-	u, err := url.Parse(upstream)
-	if err != nil {
-		http.Error(w, "Invalid upstream URL", http.StatusInternalServerError)
-		return
-	}
-
-	path := strings.TrimPrefix(r.URL.Path, prefix)
-	targetURL := strings.TrimSuffix(u.String(), "/") + "/" + strings.TrimPrefix(path, "/")
-	if r.URL.RawQuery != "" {
-		targetURL += "?" + r.URL.RawQuery
-	}
-
-	req, err := http.NewRequest(r.Method, targetURL, r.Body)
-	if err != nil {
-		http.Error(w, "Failed to create request", http.StatusBadGateway)
-		return
-	}
-	req.Header = r.Header.Clone()
-	if req.Header.Get("Authorization") == "" {
-		if c, err := r.Cookie("pgw_jwt"); err == nil && c.Value != "" {
-			req.Header.Set("Authorization", "Bearer "+c.Value)
-		}
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		http.Error(w, "Upstream unreachable", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	// The only supported proxy is secureUIServer.handleAPI. Retaining this
+	// symbol avoids an unnecessary template churn while making accidental
+	// legacy route registration fail closed.
+	http.NotFound(w, r)
 }
-
-
 
 // ----- UI auth -----
 func uiAuthorized(r *http.Request) bool {
-    c, err := r.Cookie("pgw_jwt")
-    if err != nil || c.Value == "" { return false }
-    cl, err := auth.ParseJWT(c.Value, jwtSecret)
-    if err != nil { return false }
-    return cl != nil && cl.ExpiresAt != nil && cl.ExpiresAt.Time.After(time.Now())
+	c, err := r.Cookie(sessionCookieName)
+	return err == nil && c.Value != ""
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
-    switch r.Method {
-    case http.MethodGet:
-        w.Header().Set("Content-Type", "text/html; charset=utf-8")
-        io.WriteString(w, embeddedLogin)
-    case http.MethodPost:
-        var reqBody struct{ Username, Password string }
-        if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil { http.Error(w, "bad json", 400); return }
-        api := strings.TrimSuffix(baseAPI, "/") + "/v1/auth/login"
-        jr, _ := http.NewRequest(http.MethodPost, api, strings.NewReader(string(mustJSON(reqBody))))
-        jr.Header.Set("Content-Type", "application/json")
-        resp, err := http.DefaultClient.Do(jr)
-        if err != nil { http.Error(w, "upstream", 502); return }
-        defer resp.Body.Close()
-        if resp.StatusCode != 200 { w.WriteHeader(resp.StatusCode); io.Copy(w, resp.Body); return }
-        var out struct{ Token string `json:"token"` }
-        if err := json.NewDecoder(resp.Body).Decode(&out); err != nil { http.Error(w, "bad upstream", 502); return }
-        http.SetCookie(w, &http.Cookie{Name: "pgw_jwt", Value: out.Token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
-        w.WriteHeader(204)
-    default:
-        w.WriteHeader(405)
-    }
+	http.NotFound(w, r)
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
-    http.SetCookie(w, &http.Cookie{Name: "pgw_jwt", Value: "", Path: "/", Expires: time.Unix(0,0), MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
-    http.Redirect(w, r, "/login", http.StatusFound)
+	http.NotFound(w, r)
 }
 
-func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
-
 const embeddedLogin = `
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>PGW Login</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"></head>
-<body class="bg-dark text-light"><div class="container py-5" style="max-width:480px">
-  <h3 class="mb-3">PGW Login</h3>
-  <div id="alert" class="alert alert-danger d-none"></div>
-  <form id="f" class="card card-body bg-secondary-subtle">
-    <div class="mb-3"><label class="form-label">Username</label><input class="form-control" name="u" required></div>
-    <div class="mb-3"><label class="form-label">Password</label><input type="password" class="form-control" name="p" required></div>
-    <button class="btn btn-primary w-100" type="submit">Sign in</button>
-  </form>
-</div>
-<script>
-const f=document.getElementById("f");
-f.addEventListener('submit', async (e)=>{e.preventDefault();
-  const b={username:f.u.value,password:f.p.value};
-  const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
-  if(r.status===204){window.location.replace('/');return;}
-  const t=await r.text(); const a=document.getElementById('alert'); a.classList.remove('d-none'); a.textContent=t||'Login failed';
-});
-</script>
-</body></html>`
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>PGW sign in</title><link rel="stylesheet" href="/static/styles.css?v=3"></head>
+<body><main class="login-shell" aria-labelledby="login-title"><section class="card login-card"><h1 id="login-title">PGW sign in</h1><p id="login-help" class="text-muted">Use the TLS management endpoint.</p><div id="login-error" class="field-error" role="alert" aria-live="assertive" aria-atomic="true"></div>
+<form id="login-form" aria-describedby="login-help login-error"><div><label for="login-username" class="form-label">Username</label><input id="login-username" class="form-control" name="username" autocomplete="username" required></div><div><label for="login-password" class="form-label">Password</label><input id="login-password" class="form-control" name="password" type="password" autocomplete="current-password" required></div><button class="btn btn-primary" type="submit">Sign in</button></form>
+</section></main><script src="/static/login.js?v=3"></script></body></html>`
 
 // Embedded templates (fallback when web directory doesn't exist)
 const embeddedDashboard = `
@@ -312,7 +166,6 @@ const embeddedDashboard = `
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PGW Dashboard</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css?v=1771071543">
 </head>
 <body>
@@ -386,10 +239,6 @@ const embeddedDashboard = `
             <span class="badge text-bg-secondary" id="api-status">Checking...</span>
           </div>
           <div class="col-12 col-md-4 d-flex justify-content-between">
-            <span class="fw-semibold">Agent Service</span>
-            <span class="badge text-bg-secondary" id="agent-status">Checking...</span>
-          </div>
-          <div class="col-12 col-md-4 d-flex justify-content-between">
             <span class="fw-semibold">Forwarder Service</span>
             <span class="badge text-bg-secondary" id="fwd-status">Checking...</span>
           </div>
@@ -420,7 +269,6 @@ const embeddedDashboard = `
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/static/app.js?v=1771071543"></script>
 </body>
 </html>`
@@ -433,7 +281,6 @@ const embeddedManage = `
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PGW Mapping Management</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css?v=1771071543">
 </head>
 <body>
@@ -507,7 +354,6 @@ const embeddedManage = `
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/static/app.js?v=1771071543"></script>
 </body>
 </html>`
@@ -519,7 +365,6 @@ const embeddedProxies = `
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PGW Proxy Management</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css?v=1771071543">
 </head>
 <body>
@@ -617,10 +462,59 @@ const embeddedProxies = `
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/static/app.js?v=1771071543"></script>
 </body>
 </html>`
+
+// embeddedControlPlane is deliberately a single v2 workflow. It keeps desired,
+// applied, and data-plane observations visibly distinct so a successful
+// control-plane request is never represented as egress proof.
+const embeddedControlPlane = `<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PGW control plane</title>
+  <link rel="stylesheet" href="/static/styles.css?v=3">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to control-plane content</a>
+  <header class="border-bottom border-secondary"><div class="container py-3 d-flex flex-wrap gap-3 align-items-center justify-content-between">
+    <div><a class="navbar-brand text-decoration-none" href="/">PGW control plane</a><span class="ms-2 text-muted">TLS management only</span></div>
+    <div class="d-flex gap-2"><button id="refresh" type="button" class="btn btn-outline-light">Refresh data</button><button id="logout" type="button" class="btn btn-outline-light">Sign out</button></div>
+  </div></header>
+  <main id="main-content" class="container py-4" tabindex="-1">
+    <div id="ui-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div id="ui-errors" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div>
+    <section aria-labelledby="summary-title" class="mb-4"><h1 id="summary-title" class="h3">Gateway state</h1>
+      <div class="summary-grid">
+        <article class="card card-body"><span class="text-muted">Configured proxies</span><strong id="summary-proxies" class="stat-value">—</strong></article>
+        <article class="card card-body"><span class="text-muted">Mappings</span><strong id="summary-mappings" class="stat-value">—</strong></article>
+        <article class="card card-body"><span class="text-muted">Data-plane VERIFIED</span><strong id="summary-verified" class="stat-value">—</strong></article>
+        <article class="card card-body"><span class="text-muted">Last UI refresh</span><strong id="summary-refreshed" class="stat-value">—</strong></article>
+      </div>
+    </section>
+    <section aria-labelledby="agent-title" class="card mb-4" id="agent-state-panel"><div class="card-header"><h2 id="agent-title" class="h5 mb-0">Agent reconcile state</h2></div><div class="card-body"><dl class="status-grid">
+      <div><dt>State</dt><dd id="agent-state-value">—</dd></div><div><dt>Generation</dt><dd id="agent-generation-value">—</dd></div><div><dt>IPv6 policy</dt><dd id="agent-ipv6-policy-value">—</dd></div><div><dt>Ruleset hash</dt><dd id="agent-ruleset-value" class="monospace">—</dd></div><div><dt>Last reconcile</dt><dd id="agent-reconcile-value">—</dd></div><div><dt>LKG / rollback</dt><dd id="agent-lkg-value">—</dd></div><div><dt>Reported error</dt><dd id="agent-error-value">—</dd></div>
+    </dl><p class="mb-0 text-muted">A pending/applied mismatch is shown above. LKG is only claimed when the Agent state API explicitly reports it.</p></div></section>
+    <section aria-labelledby="create-title" class="card mb-4"><div class="card-header"><h2 id="create-title" class="h5 mb-0">Create mapping draft</h2></div><div class="card-body">
+      <form id="mapping-form" novalidate><fieldset><legend class="h6">Client, proxy, and enforced policy</legend>
+        <p id="mapping-policy-description" class="text-muted">Only <strong>web_only</strong> is available: TCP ports 80 and 443 only. UDP is blocked and IPv6 is deny-only; the agent panel shows whether that policy is verified. There is no direct fallback to WAN.</p>
+        <div class="form-grid">
+          <div><label for="mapping-client-ip" class="form-label">Client IPv4 address</label><input id="mapping-client-ip" name="client_ip" class="form-control" inputmode="decimal" autocomplete="off" aria-describedby="mapping-client-help mapping-client-error" required><div id="mapping-client-help" class="form-text">A host address is normalized to IPv4 /32.</div><div id="mapping-client-error" class="field-error"></div></div>
+          <div><label for="mapping-proxy" class="form-label">Proxy</label><select id="mapping-proxy" class="form-select" aria-describedby="mapping-policy-description" required><option>Loading…</option></select></div>
+          <div><label for="mapping-policy" class="form-label">Egress policy</label><select id="mapping-policy" class="form-select" aria-describedby="mapping-policy-description" required><option>Loading…</option></select></div>
+          <div><label for="mapping-port" class="form-label">Redirect port</label><input id="mapping-port" class="form-control" type="number" min="15001" max="15999" value="15001" aria-describedby="mapping-port-help" required><div id="mapping-port-help" class="form-text">Allowed range: 15001–15999.</div></div>
+        </div>
+        <div class="mt-3 d-flex flex-wrap gap-2"><button id="mapping-preview-button" type="button" class="btn btn-outline-light">Validate preview</button><button type="submit" class="btn btn-primary">Create DRAFT</button></div>
+      </fieldset></form>
+      <div id="mapping-preview" class="validation-preview mt-3" role="status" aria-live="polite">Run validation before creating a draft.</div>
+    </div></section>
+    <section aria-labelledby="mapping-title" class="card mb-4"><div class="card-header"><h2 id="mapping-title" class="h5 mb-0">Mappings: desired, applied, and data-plane state</h2></div><div class="table-responsive"><table class="table table-striped align-middle mb-0"><caption class="sr-only">Mapping desired state, applied generation and hash, data-plane observation, and actions</caption><thead><tr><th scope="col">Mapping</th><th scope="col">Client → proxy</th><th scope="col">Desired</th><th scope="col">Applied generation</th><th scope="col">Applied hash</th><th scope="col">Data-plane</th><th scope="col">Actions</th></tr></thead><tbody id="mappings-body"><tr><td colspan="7">Loading mappings…</td></tr></tbody></table></div></section>
+    <section aria-labelledby="proof-title" class="card mb-4"><div class="card-header"><h2 id="proof-title" class="h5 mb-0">Proxy egress check</h2></div><div class="card-body"><p class="mb-2 text-muted">This invokes a supported proxy control-plane check. Exit IP, latency, time, or success here are <strong>not</strong> actual applied mapping proof and never change data-plane state.</p></div><div class="table-responsive"><table class="table table-striped align-middle mb-0"><caption class="sr-only">Proxy control-plane check observations</caption><thead><tr><th scope="col">Proxy</th><th scope="col">Check status</th><th scope="col">Checked exit IP</th><th scope="col">Latency</th><th scope="col">Checked at</th><th scope="col">Action</th></tr></thead><tbody id="proxies-body"><tr><td colspan="6">Loading proxy checks…</td></tr></tbody></table></div></section>
+    <section aria-labelledby="audit-title" class="card"><div class="card-header"><h2 id="audit-title" class="h5 mb-0">Audit timeline</h2></div><div class="card-body"><ol id="audit-timeline" class="audit-timeline"><li>Loading audit events…</li></ol><button id="audit-more" type="button" class="btn btn-outline-light" hidden>Load older audit events</button></div></section>
+  </main>
+  <script src="/static/app.js?v=3"></script>
+</body></html>`
 
 // Embedded assets - minimal versions
 const embeddedCSS = `

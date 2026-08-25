@@ -17,7 +17,8 @@
 - Root cause upstream.
 
 ## Backups
-- Postgres: pg_dump to S3/NAS daily; retain 7 days.
+- SQLite: use the transactional consistent snapshot, checksum and integrity
+  check; never copy the live database while API is running.
 - SQLite (lab): stop services and copy DB WAL files.
 
 ## Upgrades

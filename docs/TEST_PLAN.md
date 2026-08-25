@@ -20,7 +20,8 @@
 - Block-on-fail acceptance with browser from client VM.
 
 ## 4. Regression and Chaos
-- Restart NATS -> system still reconciles via DB polling.
+- Restart API -> static base remains fail-close; Agent reports unknown/failed and
+  resumes UDS snapshot reconcile only after API readiness returns.
 - Reboot host -> systemd ensures rules recreated.
 - DB readonly -> agent keeps enforcing last good state.
 

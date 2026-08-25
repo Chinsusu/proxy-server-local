@@ -4,18 +4,57 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=pgw
-Group=pgw
-EnvironmentFile=/etc/pgw/pgw.env
-Environment=PGW_FWD_ADDR=:%i
+Type=notify
+NotifyAccess=main
+User=pgw-fwd
+Group=pgw-fwd
+# The Agent atomically publishes this non-secret config before it starts the
+# unit. %i is a decimal redirect port; it is never a mapping or proxy secret.
+Environment=PGW_FWD_CONFIG=/run/pgw/forwarders/%i/forwarder.json
+LoadCredential=proxy_username:/run/pgw/forwarders/%i/credentials/proxy_username
+LoadCredential=proxy_password:/run/pgw/forwarders/%i/credentials/proxy_password
 ExecStart=/usr/local/bin/pgw-fwd
-Restart=always
+Restart=on-failure
 RestartSec=2s
+TimeoutStartSec=30s
+TimeoutStopSec=35s
+KillSignal=SIGTERM
 
 # Resource Limits
 LimitNOFILE=32768
 MemoryMax=128M
 TasksMax=1024
+UMask=0077
+RuntimeDirectory=pgw-fwd/%i
+RuntimeDirectoryMode=0750
+
+# The forwarder receives only transparently redirected TCP and has no route to
+# firewall or service-management control planes.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadOnlyPaths=/run/pgw/forwarders/%i
 
 # Logging
 StandardOutput=journal
