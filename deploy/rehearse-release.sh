@@ -76,7 +76,15 @@ work="$(mktemp -d "${output_parent}/.pgw-rehearsal-work.XXXXXXXX")"
 stage="$(mktemp -d "${output_parent}/.pgw-rehearsal-evidence.XXXXXXXX")"
 snapshot="${work}/assembly"
 cleanup() {
-    [[ "${work}" == "${output_parent}/.pgw-rehearsal-work."* ]] && rm -rf -- "${work}"
+    # go's toolchain auto-download (triggered inside installer_transaction_test.sh's
+    # go build) leaves its module-cache directories mode 0555; this cleanup runs as
+    # the same non-root user that owns them (this script never holds root, unlike
+    # nonroot_crash_evidence_runner.sh's outer context), so rm -rf cannot unlink
+    # their entries without first restoring write permission.
+    [[ "${work}" == "${output_parent}/.pgw-rehearsal-work."* ]] && {
+        chmod -R u+w -- "${work}" 2>/dev/null || true
+        rm -rf -- "${work}"
+    }
     [[ "${stage}" == "${output_parent}/.pgw-rehearsal-evidence."* ]] && rm -rf -- "${stage}"
 }
 trap cleanup EXIT
@@ -187,4 +195,5 @@ find "${stage}" -maxdepth 1 -type f -exec chmod 0644 {} +
 rm -rf -- "${snapshot}"
 mv -T -- "${stage}" "${output}"
 trap - EXIT
+chmod -R u+w -- "${work}" 2>/dev/null || true
 rm -rf -- "${work}"
