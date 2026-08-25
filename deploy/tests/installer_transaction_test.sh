@@ -118,7 +118,7 @@ trap cleanup EXIT
 install -d -m 0700 "${artifact_root}"
 for command_name in api agent fwd ui health snapshot-crypt; do
     artifact="${artifact_root}/pgw-${command_name}"
-    CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "${artifact}" "./cmd/${command_name}"
+    (cd -- "${ROOT}" && CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "${artifact}" "./cmd/${command_name}")
     chmod 0555 "${artifact}"
 done
 
