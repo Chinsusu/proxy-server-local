@@ -1506,7 +1506,7 @@ if [[ "${section}" == all || "${section}" == crash ]]; then
     printf '{"legacy":"fixture"}\n' >"${crash_fixture}/system/var/lib/pgw/state.json"
     cp -- "${crash_fixture}/system/var/lib/pgw/state.json" "${crash_fixture}/expected-system/var/lib/pgw/state.json"
     crash_rc="$(run_failure "${crash_fixture}" "${legacy_crash}")"
-    [[ "${crash_rc}" == 137 ]] || { printf 'legacy sealed crash returned %s, wanted 137\n' "${crash_rc}" >&2; exit 1; }
+    [[ "${crash_rc}" == 137 ]] || { printf 'legacy sealed crash returned %s, wanted 137\n' "${crash_rc}" >&2; cat "${crash_fixture}/installer.log" >&2; exit 1; }
     journal="${crash_fixture}/system/var/lib/pgw-lifecycle/recovery.journal"
     snapshot="$(sed -n 's/^snapshot=//p' "${journal}")"
     [[ -f "${journal}" && "${snapshot}" == "${crash_fixture}/backups"/install.* ]]
