@@ -192,9 +192,9 @@ readonly BINARIES=(
 )
 install -d -m 0700 "${stage}/binary-scan-input"
 install -d -m 0700 "${stage}/sbom-input"
-printf 'format pgw-sbom-subjects-v1\nsubject_count 6\n' >"${stage}/sbom-subjects.manifest"
-printf 'format pgw-secret-scan-coverage-v1\nsource full\nbundle closed-pre-report\nbinary_method raw-digest-plus-strings\nbinary_count 6\n' \
-    >"${stage}/secret-scan.coverage"
+printf 'format pgw-sbom-subjects-v1\nsubject_count %s\n' "${#BINARIES[@]}" >"${stage}/sbom-subjects.manifest"
+printf 'format pgw-secret-scan-coverage-v1\nsource full\nbundle closed-pre-report\nbinary_method raw-digest-plus-strings\nbinary_count %s\n' \
+    "${#BINARIES[@]}" >"${stage}/secret-scan.coverage"
 for relative in "${BINARIES[@]}"; do
     binary="${assembly}/${relative}"
     [[ -f "${binary}" && ! -L "${binary}" ]] || exit 65

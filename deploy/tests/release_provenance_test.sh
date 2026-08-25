@@ -133,11 +133,11 @@ grep -Fxq 'format pgw-evidence-index-v2' "${fixture}/candidate/evidence.index"
 grep -Fxq 'candidate_only true' "${fixture}/candidate/promotion.manifest"
 grep -Fxq 'production_promotion_available false' "${fixture}/candidate/promotion.manifest"
 grep -Fxq 'required_attestation independent-external-oidc-sigstore' "${fixture}/candidate/promotion.manifest"
-grep -Fxq 'subject_count 6' "${fixture}/candidate/sbom-subjects.manifest"
-[[ "$(grep -c '^binary ' "${fixture}/candidate/sbom-subjects.manifest")" == 6 ]]
+grep -Fxq 'subject_count 7' "${fixture}/candidate/sbom-subjects.manifest"
+[[ "$(grep -c '^binary ' "${fixture}/candidate/sbom-subjects.manifest")" == 7 ]]
 grep -Fxq 'source full' "${fixture}/candidate/secret-scan.coverage"
 grep -Fxq 'bundle closed-pre-report' "${fixture}/candidate/secret-scan.coverage"
-grep -Fxq 'binary_count 6' "${fixture}/candidate/secret-scan.coverage"
+grep -Fxq 'binary_count 7' "${fixture}/candidate/secret-scan.coverage"
 for scan in source binary bundle; do
     jq -e 'type == "array" and length == 0' "${fixture}/candidate/secret-scan-${scan}.json" >/dev/null
 done
