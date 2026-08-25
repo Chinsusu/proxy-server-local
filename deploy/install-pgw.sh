@@ -1658,11 +1658,17 @@ try:
     reportfd=os.open("report.json",os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=rfd)
     reportst=os.fstat(reportfd)
     if not stat.S_ISREG(reportst.st_mode) or reportst.st_uid != owner or stat.S_IMODE(reportst.st_mode) != 0o600: raise SystemExit("unsafe report")
-    account=pwd.getpwnam("pgw-api")
-    def drop_privileges():
-        os.initgroups(account.pw_name,account.pw_gid); os.setgid(account.pw_gid); os.setuid(account.pw_uid)
+    preexec_fn=None
+    if owner == 0:
+        # owner is runtime_uid: 0 only for a real root install. The
+        # non-root test harness already owns runtime_dir as itself and has
+        # no pgw-api account to drop to.
+        account=pwd.getpwnam("pgw-api")
+        def drop_privileges():
+            os.initgroups(account.pw_name,account.pw_gid); os.setgid(account.pw_gid); os.setuid(account.pw_uid)
+        preexec_fn=drop_privileges
     for fd in (statefd,keyfd,reportfd): os.set_inheritable(fd,True)
-    result=subprocess.run([api,"import-legacy-state","--state-fd",str(statefd),"--database",database,"--key-fd",str(keyfd),"--report-fd",str(reportfd)],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,pass_fds=(statefd,keyfd,reportfd),preexec_fn=drop_privileges,check=False)
+    result=subprocess.run([api,"import-legacy-state","--state-fd",str(statefd),"--database",database,"--key-fd",str(keyfd),"--report-fd",str(reportfd)],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,pass_fds=(statefd,keyfd,reportfd),preexec_fn=preexec_fn,check=False)
     if result.returncode != 0: raise SystemExit("import failed")
 finally:
     for fd_name in ("statefd","keyfd","reportfd","rfd"):
