@@ -204,6 +204,15 @@ assert_fake_sysctl_contract() {
         || { printf 'present PGW sysctl config was not applied\n' >&2; exit 1; }
 
     reset_fake_sysctl_contract_state "${fixture}" "${command}"
+    /usr/bin/install -m 0644 -- "${ROOT}/deploy/sysctl-pgw.conf" "${config}"
+    cmp -s "${ROOT}/deploy/sysctl-pgw.conf" "${config}" \
+        || { printf 'repository PGW sysctl config fixture copy changed\n' >&2; exit 1; }
+    PGW_FAKE_ROOT="${fixture}" "${command}" restart systemd-sysctl.service
+    [[ "$(awk -F '\t' '$1=="systemd-sysctl.service" {print $3}' "${fixture}/runtime/services")" == active &&
+       "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 1 ]] \
+        || { printf 'repository PGW sysctl config was not applied\n' >&2; exit 1; }
+
+    reset_fake_sysctl_contract_state "${fixture}" "${command}"
     printf 'net.ipv4.ip_forward = 1\nnet.ipv4.ip_forward = 0\n' >"${config}"
     PGW_FAKE_ROOT="${fixture}" "${command}" restart systemd-sysctl.service
     [[ "$(awk -F '\t' '$1=="systemd-sysctl.service" {print $3}' "${fixture}/runtime/services")" == active &&
@@ -433,6 +442,119 @@ run_failure() {
     printf '%s\n' "${rc}"
 }
 
+print_bounded_fixture_evidence() {
+    /usr/bin/python3 -I - "$1" <<'PY'
+import os
+import stat
+import sys
+import unicodedata
+
+LIMIT = 65536
+NAMES = ("lifecycle-transcript.tsv", "commands.log", "installer.log")
+MARKER = "[missing or unsafe evidence file]"
+
+
+def emit(name, message):
+    sys.stderr.write(f"[fixture-evidence:{name}] {message}\n")
+
+
+def sanitize(payload):
+    text = payload.decode("utf-8", "backslashreplace")
+    safe = []
+    for character in text:
+        if character in ("\n", "\t"):
+            safe.append(character)
+            continue
+        category = unicodedata.category(character)
+        if category.startswith("C") or category in ("Zl", "Zp"):
+            codepoint = ord(character)
+            safe.append(f"\\u{codepoint:04x}" if codepoint <= 0xffff else f"\\U{codepoint:08x}")
+        else:
+            safe.append(character)
+    return "".join(safe)
+
+
+def admitted_file(info, expected_uid):
+    return (stat.S_ISREG(info.st_mode) and info.st_uid == expected_uid
+            and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) & 0o022 == 0)
+
+
+def stable_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def name_binds(directory, name, info):
+    bound = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    return (bound.st_dev, bound.st_ino) == (info.st_dev, info.st_ino)
+
+
+fixture = sys.argv[1]
+directory = -1
+try:
+    if not os.path.isabs(fixture) or os.path.normpath(fixture) != fixture:
+        raise ValueError("unsafe fixture directory")
+    directory = os.open(fixture, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory_info = os.fstat(directory)
+    if (not stat.S_ISDIR(directory_info.st_mode)
+            or directory_info.st_uid != os.geteuid()
+            or stat.S_IMODE(directory_info.st_mode) & 0o022):
+        raise ValueError("unsafe fixture directory")
+except (OSError, ValueError):
+    for basename in NAMES:
+        emit(basename, MARKER)
+else:
+    for basename in NAMES:
+        descriptor = -1
+        payload = None
+        try:
+            descriptor = os.open(
+                basename,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=directory,
+            )
+            before = os.fstat(descriptor)
+            if not admitted_file(before, os.geteuid()) or not name_binds(directory, basename, before):
+                raise ValueError("unsafe evidence file")
+            os.lseek(descriptor, max(0, before.st_size - LIMIT), os.SEEK_SET)
+            chunks = []
+            remaining = LIMIT
+            while remaining:
+                chunk = os.read(descriptor, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            after = os.fstat(descriptor)
+            if (not admitted_file(after, os.geteuid())
+                    or stable_identity(after) != stable_identity(before)
+                    or not name_binds(directory, basename, after)):
+                raise ValueError("evidence file changed")
+            payload = b"".join(chunks)
+        except (OSError, ValueError):
+            payload = None
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        if payload is None:
+            emit(basename, MARKER)
+            continue
+        emit(basename, "--- last at most 65536 bytes ---")
+        text = sanitize(payload)
+        if not text:
+            emit(basename, "[empty evidence file]")
+            continue
+        lines = text.split("\n")
+        if text.endswith("\n"):
+            lines.pop()
+        for line in lines:
+            emit(basename, line)
+finally:
+    if directory >= 0:
+        os.close(directory)
+PY
+}
+
 run_failure_low_fd() {
     local fixture="$1" boundary="$2" rc
     set +e
@@ -531,7 +653,7 @@ if [[ "${section}" == all || "${section}" == success ]]; then
     rc="$(run_failure "${fixture}" success_rollback)"
     [[ "${rc}" == 0 ]] || {
         printf 'successful upgrade/rollback rehearsal returned %s\n' "${rc}" >&2
-        cat "${fixture}/installer.log" >&2
+        print_bounded_fixture_evidence "${fixture}"
         exit 1
     }
     grep -Fxq 'fixture_upgrade PASS' "${fixture}/rehearsal-results"
