@@ -41,8 +41,8 @@ func platformLoadKeyFile(name string) (key Key, resultErr error) {
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return key, fmt.Errorf("inspect snapshot key: %w", err)
 	}
-	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != 0 || uint32(stat.Mode)&0o7777 != 0o600 || stat.Size != KeySize {
-		return key, errors.New("snapshot key must be a root-owned mode-0600 regular file containing exactly 32 bytes")
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || uint32(stat.Mode)&0o7777 != 0o600 || stat.Size != KeySize {
+		return key, errors.New("snapshot key must be owned by the caller and be a mode-0600 regular file containing exactly 32 bytes")
 	}
 	before, err := sourceState(fd)
 	if err != nil {

@@ -35,7 +35,7 @@ func TestSnapshotCryptCLIChild(t *testing.T) {
 }
 
 func TestLinuxExecutableEncryptVerifyDecryptPublishAndNegatives(t *testing.T) {
-	directory := cliTrustedRootTemp(t)
+	directory := cliTrustedCallerTemp(t)
 	probe, err := snapshotcrypto.CreateCiphertextPublisher(filepath.Join(directory, "probe"))
 	if err != nil {
 		t.Skipf("O_TMPFILE/linkat publication unavailable: %v", err)
@@ -130,7 +130,7 @@ func TestLinuxExecutableEncryptVerifyDecryptPublishAndNegatives(t *testing.T) {
 }
 
 func TestLinuxExecutableRejectsOversizeBeforeOutputAndConcurrentMutation(t *testing.T) {
-	directory := cliTrustedRootTemp(t)
+	directory := cliTrustedCallerTemp(t)
 	keyPath := filepath.Join(directory, "key")
 	if err := os.WriteFile(keyPath, bytes.Repeat([]byte{1}, snapshotcrypto.KeySize), 0o600); err != nil {
 		t.Fatal(err)
@@ -199,14 +199,15 @@ func TestLinuxExecutableRejectsOversizeBeforeOutputAndConcurrentMutation(t *test
 	}
 }
 
-func cliTrustedRootTemp(t *testing.T) string {
+func cliTrustedCallerTemp(t *testing.T) string {
 	t.Helper()
-	if os.Geteuid() != 0 {
-		t.Skip("root required for executable publication tests")
-	}
-	directory, err := os.MkdirTemp("/root", "pgw-snapshot-cli-test-")
+	parent, err := filepath.Abs(".")
 	if err != nil {
-		t.Skipf("trusted test directory unavailable: %v", err)
+		t.Fatal(err)
+	}
+	directory, err := os.MkdirTemp(parent, ".pgw-snapshot-cli-test-")
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := os.Chmod(directory, 0o700); err != nil {
 		t.Fatal(err)

@@ -34,6 +34,84 @@ func trustedRootTemp(t *testing.T) string {
 	return directory
 }
 
+func trustedCallerTemp(t *testing.T) string {
+	t.Helper()
+	parent, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := os.MkdirTemp(parent, ".pgw-snapshotcrypto-caller-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		_ = os.RemoveAll(directory)
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	return directory
+}
+
+func TestTrustedSourceAllowsPrivateCallerOwnedTree(t *testing.T) {
+	directory := trustedCallerTemp(t)
+	source := filepath.Join(directory, "source")
+	if err := os.WriteFile(source, []byte("snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, _, err := OpenTrustedSource(source)
+	if err != nil {
+		t.Fatalf("caller-owned trusted source rejected: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := CreateCiphertextPublisher(filepath.Join(directory, "ciphertext"))
+	if err != nil {
+		t.Fatalf("create caller-owned ciphertext publisher: %v", err)
+	}
+	if _, err := publisher.File().Write([]byte("ciphertext")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publisher.Publish(); err != nil {
+		t.Fatalf("publish caller-owned unnamed ciphertext: %v", err)
+	}
+
+	unsafe := filepath.Join(directory, "unsafe")
+	if err := os.Mkdir(unsafe, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unsafe, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unsafe, "source"), []byte("snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := OpenTrustedSource(filepath.Join(unsafe, "source")); err == nil {
+		t.Fatal("group/world-writable caller-owned ancestor was accepted")
+	}
+}
+
+func TestRootCallerRejectsForeignOwnedAncestor(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("root ownership boundary requires root")
+	}
+	directory := trustedRootTemp(t)
+	foreign := filepath.Join(directory, "foreign")
+	if err := os.Mkdir(foreign, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(foreign, "source")
+	if err := os.WriteFile(source, []byte("snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(foreign, 1, -1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := OpenTrustedSource(source); err == nil {
+		t.Fatal("root caller accepted a foreign-owned ancestor")
+	}
+}
+
 func TestTrustedSourceIdentityAndConcurrentMutation(t *testing.T) {
 	directory := trustedRootTemp(t)
 	path := filepath.Join(directory, "source")

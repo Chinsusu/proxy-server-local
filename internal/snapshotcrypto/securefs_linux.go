@@ -71,7 +71,9 @@ func (state SourceState) Metadata(snapshotID, releaseID, keyID string, keyObject
 }
 
 // OpenTrustedSource opens a regular source with O_NONBLOCK and rejects every
-// symlink, non-root-owned ancestor, and group/world-writable ancestor.
+// symlink, ancestor not owned by root or the caller, and group/world-writable
+// ancestor. Root execution therefore retains the production root-only policy,
+// while an unprivileged caller can safely operate inside its own private tree.
 func OpenTrustedSource(name string) (*os.File, SourceState, error) {
 	var empty SourceState
 	directory, base, err := openTrustedParentDirectory(name)
@@ -143,10 +145,24 @@ type publicationOps struct {
 
 var realPublicationOps = publicationOps{
 	fileSync:       func(file *os.File) error { return file.Sync() },
-	link:           unix.Linkat,
+	link:           linkUnnamedFile,
 	directorySync:  unix.Fsync,
 	fileClose:      func(file *os.File) error { return file.Close() },
 	directoryClose: unix.Close,
+}
+
+func linkUnnamedFile(oldDirectory int, oldName string, newDirectory int, newName string, flags int) error {
+	err := unix.Linkat(oldDirectory, oldName, newDirectory, newName, flags)
+	if err == nil || oldName != "" || flags != unix.AT_EMPTY_PATH ||
+		(!errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.EACCES) && !errors.Is(err, unix.EPERM)) {
+		return err
+	}
+	// AT_EMPTY_PATH requires CAP_DAC_READ_SEARCH even when the caller owns the
+	// O_TMPFILE inode. Linux documents /proc/self/fd plus AT_SYMLINK_FOLLOW as
+	// the equivalent unprivileged publication path. The descriptor remains
+	// pinned throughout this atomic no-replace link.
+	procDescriptor := fmt.Sprintf("/proc/self/fd/%d", oldDirectory)
+	return unix.Linkat(unix.AT_FDCWD, procDescriptor, newDirectory, newName, unix.AT_SYMLINK_FOLLOW)
 }
 
 type reconciliationOps struct {
@@ -545,8 +561,9 @@ func validateTrustedDirectory(fd int) error {
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return err
 	}
-	if stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != 0 || uint32(stat.Mode)&0o022 != 0 {
-		return errors.New("path ancestor must be a root-owned non-group/world-writable directory")
+	callerUID := uint32(os.Geteuid())
+	if stat.Mode&unix.S_IFMT != unix.S_IFDIR || (stat.Uid != 0 && stat.Uid != callerUID) || uint32(stat.Mode)&0o022 != 0 {
+		return errors.New("path ancestor must be owned by root or the caller and not group/world-writable")
 	}
 	return nil
 }
