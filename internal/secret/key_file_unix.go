@@ -32,6 +32,17 @@ func secureReadFile(path string, limit int64, allowReadOnly bool, unsafeErr erro
 	if !parentInfo.IsDir() || parentInfo.Mode().Perm()&0o022 != 0 || !ownedByEffectiveUser(parentInfo) {
 		return nil, unsafeErr
 	}
+	// Check the path's metadata before opening so an unreadable, invalid mode
+	// (for example 0000) is consistently classified as unsafe. This lookup is
+	// only an early rejection: the opened inode is validated again below before
+	// any bytes are read.
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("secret: inspect key file: %w", err)
+	}
+	if !ownerOnlyFile(pathInfo, allowReadOnly) {
+		return nil, unsafeErr
+	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("secret: securely open key file: %w", err)
@@ -42,11 +53,7 @@ func secureReadFile(path string, limit int64, allowReadOnly bool, unsafeErr erro
 	if err != nil {
 		return nil, fmt.Errorf("secret: fstat key file: %w", err)
 	}
-	if !info.Mode().IsRegular() || !ownedByEffectiveUser(info) {
-		return nil, unsafeErr
-	}
-	mode := info.Mode().Perm()
-	if mode != 0o600 && (!allowReadOnly || mode != 0o400) {
+	if !ownerOnlyFile(info, allowReadOnly) {
 		return nil, unsafeErr
 	}
 	contents, err := io.ReadAll(io.LimitReader(file, limit+1))
@@ -59,6 +66,14 @@ func secureReadFile(path string, limit int64, allowReadOnly bool, unsafeErr erro
 		return nil, ErrInvalidKey
 	}
 	return contents, nil
+}
+
+func ownerOnlyFile(info os.FileInfo, allowReadOnly bool) bool {
+	if !info.Mode().IsRegular() || !ownedByEffectiveUser(info) {
+		return false
+	}
+	mode := info.Mode().Perm()
+	return mode == 0o600 || (allowReadOnly && mode == 0o400)
 }
 
 func ownedByEffectiveUser(info os.FileInfo) bool {

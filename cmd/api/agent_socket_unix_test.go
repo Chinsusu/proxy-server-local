@@ -68,9 +68,7 @@ func TestRecoverStaleAgentSocketUnlinksOnlyOwnedStaleSocket(t *testing.T) {
 	if err := os.Chmod(path, agentSocketMode); err != nil {
 		t.Fatal(err)
 	}
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	closeUnixListenerLeavingStaleSocket(t, listener)
 	if _, err := os.Lstat(path); err != nil {
 		t.Fatalf("closed listener did not leave a stale socket: %v", err)
 	}
@@ -92,9 +90,7 @@ func TestRecoverStaleAgentSocketAcceptsRestrictivePreChmodCrashSocket(t *testing
 	if err := os.Chmod(path, agentSocketPreChmodMode); err != nil {
 		t.Fatal(err)
 	}
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	closeUnixListenerLeavingStaleSocket(t, listener)
 	if err := recoverStaleAgentSocket(path); err != nil {
 		t.Fatalf("restrictive pre-chmod stale socket was not recoverable: %v", err)
 	}
@@ -112,14 +108,24 @@ func TestRecoverStaleAgentSocketAcceptsPublished0660Socket(t *testing.T) {
 	if err := os.Chmod(path, agentSocketMode); err != nil {
 		t.Fatal(err)
 	}
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	closeUnixListenerLeavingStaleSocket(t, listener)
 	if err := recoverStaleAgentSocket(path); err != nil {
 		t.Fatalf("published stale socket was not recoverable: %v", err)
 	}
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
 		t.Fatalf("published stale socket remains: %v", err)
+	}
+}
+
+func closeUnixListenerLeavingStaleSocket(t *testing.T, listener net.Listener) {
+	t.Helper()
+	unixListener, ok := listener.(*net.UnixListener)
+	if !ok {
+		t.Fatalf("listener type = %T, want *net.UnixListener", listener)
+	}
+	unixListener.SetUnlinkOnClose(false)
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -254,8 +254,9 @@ case "$(basename -- "$0")" in
     sqlite3) printf 'ok\n' ;;
     python3)
         dispatch_restore_crash "$@" || true
+        last_arg="${!#}"
         if [[ "${PGW_CRASH_LEGACY_SEALED:-0}" == 1 && "${2:-}" == */deploy/snapshot_payload.py && \
-              "${3:-}" == materialize && "${@: -1}" == "${root}/system/run/pgw/legacy-sealed.install."* ]]; then
+              "${3:-}" == materialize && "${last_arg}" == "${root}/system/run/pgw/legacy-sealed.install."* ]]; then
             if [[ "$(uname -s)" == MINGW* ]]; then
                 MSYS2_ARG_CONV_EXCL='/etc;/var;/run;/usr;/dev' python "$@"
             else
