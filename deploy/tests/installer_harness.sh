@@ -210,6 +210,14 @@ if [[ "${boundary}" == recover_restore_crash ]]; then
     trap - EXIT
     exit 0
 fi
+if [[ "${boundary}" == crash_legacy_sealed || "${boundary}" == crash_legacy_post_import ]]; then
+    # Both crash points fire from inside import_legacy_state, which is a
+    # no-op unless legacy state is pending. The exact checksum is never
+    # compared: both boundaries kill before the importer's report checksum
+    # is validated, so any well-formed placeholder is sufficient.
+    legacy_state_pending=1
+    legacy_state_checksum="$(printf '0%.0s' {1..64})"
+fi
 if [[ "${boundary}" == crash_legacy_sealed ]]; then
     # lifecycle_fake kills immediately after production materialization and
     # before the sealed plaintext can be consumed or removed. The fake tool
@@ -218,8 +226,6 @@ if [[ "${boundary}" == crash_legacy_sealed ]]; then
     # reaches the harness itself: on_exit must never run, exactly like
     # crash_ready and crash_legacy_post_import, so the durable journal and
     # sealed stage survive for the separate boundary=recover pass.
-    legacy_state_pending=1
-    legacy_state_checksum="$(printf '0%.0s' {1..64})"
     export PGW_CRASH_LEGACY_SEALED=1
     export PGW_HARNESS_PID="$$"
 fi
