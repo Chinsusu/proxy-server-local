@@ -1505,6 +1505,12 @@ if [[ "${section}" == all || "${section}" == crash ]]; then
     make_fixture "${crash_fixture}" active
     printf '{"proxies":{},"clients":{},"mappings":{}}\n' >"${crash_fixture}/system/var/lib/pgw/state.json"
     cp -- "${crash_fixture}/system/var/lib/pgw/state.json" "${crash_fixture}/expected-system/var/lib/pgw/state.json"
+    # crash_legacy_post_import runs the real import subprocess against this
+    # file with the production sqlite driver. make_fixture's placeholder text
+    # is not a valid database; truncate to empty so modernc.org/sqlite
+    # initializes it fresh, exactly like a real first install would.
+    : >"${crash_fixture}/system/var/lib/pgw/pgw.db"
+    cp -- "${crash_fixture}/system/var/lib/pgw/pgw.db" "${crash_fixture}/expected-system/var/lib/pgw/pgw.db"
     crash_rc="$(run_failure "${crash_fixture}" "${legacy_crash}")"
     [[ "${crash_rc}" == 137 ]] || { printf 'legacy sealed crash returned %s, wanted 137\n' "${crash_rc}" >&2; cat "${crash_fixture}/installer.log" >&2; exit 1; }
     journal="${crash_fixture}/system/var/lib/pgw-lifecycle/recovery.journal"
@@ -1581,6 +1587,8 @@ if [[ "${section}" == all || "${section}" == crash ]]; then
         make_fixture "${crash_fixture}" active
         printf '{"proxies":{},"clients":{},"mappings":{}}\n' >"${crash_fixture}/system/var/lib/pgw/state.json"
         cp -- "${crash_fixture}/system/var/lib/pgw/state.json" "${crash_fixture}/expected-system/var/lib/pgw/state.json"
+        : >"${crash_fixture}/system/var/lib/pgw/pgw.db"
+        cp -- "${crash_fixture}/system/var/lib/pgw/pgw.db" "${crash_fixture}/expected-system/var/lib/pgw/pgw.db"
         crash_rc="$(run_failure "${crash_fixture}" crash_legacy_post_import)"
         [[ "${crash_rc}" == 137 ]]
         journal="${crash_fixture}/system/var/lib/pgw-lifecycle/recovery.journal"
