@@ -134,6 +134,15 @@ make_fixture() {
         rm -f -- "${system}/proc/${fake%%:*}/exe"
         ln -s "${system}/usr/local/bin/pgw-${fake#*:}" "${system}/proc/${fake%%:*}/exe"
     done
+    # Production root can restore arbitrary authenticated ownership. This
+    # non-root evidence fixture must instead use the caller's effective IDs so
+    # decrypt-publish can reapply the captured metadata without privilege.
+    chgrp -hR "$(id -g)" "${system}" "${fixture}/runtime"
+    if find "${system}" "${fixture}/runtime" -xdev \
+        \( ! -uid "${EUID}" -o ! -gid "$(id -g)" \) -print -quit | grep -q .; then
+        printf 'non-root transaction fixture has foreign ownership\n' >&2
+        return 1
+    fi
     cp -a -- "${system}" "${fixture}/expected-system"
     cp -a -- "${fixture}/runtime" "${fixture}/expected-runtime"
 }
@@ -175,6 +184,159 @@ assert_restore_authority_contract() {
     [[ "${rc}" != 0 ]] || { printf 'restore-authority accepted special UI file\n' >&2; exit 1; }
     rm -f -- "${static}/app.js"
     printf 'old-ui-asset\n' >"${static}/app.js"
+}
+
+cleanup_nonroot_sealed_ui_case() {
+    local original_rc="$1" fixture="$2" cleanup_rc=0
+    trap - EXIT
+    /usr/bin/python3 -I - "${temp_root}" "${fixture}" "${EUID}" <<'PY' || cleanup_rc=$?
+import os
+import shutil
+import stat
+import sys
+
+temp_root, fixture, expected_text = sys.argv[1:]
+expected = int(expected_text)
+allowed = {"sealed-ui-materialize-success", "sealed-ui-materialize-failure"}
+name = os.path.basename(fixture)
+if (not os.path.isabs(temp_root) or os.path.normpath(temp_root) != temp_root or
+        fixture != os.path.join(temp_root, name) or name not in allowed):
+    raise SystemExit("unsafe sealed UI cleanup target")
+
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+if not shutil.rmtree.avoids_symlink_attacks:
+    raise SystemExit("symlink-safe sealed UI cleanup is unavailable")
+temp_fd = os.open(temp_root, flags)
+case_fd = -1
+try:
+    temp_info = os.fstat(temp_fd)
+    if temp_info.st_uid != expected or stat.S_IMODE(temp_info.st_mode) & 0o022:
+        raise SystemExit("unsafe sealed UI cleanup parent")
+    case_fd = os.open(name, flags, dir_fd=temp_fd)
+    case_info = os.fstat(case_fd)
+    if case_info.st_uid != expected or stat.S_IMODE(case_info.st_mode) != 0o700:
+        raise SystemExit("unsafe sealed UI cleanup case")
+
+    def grant_owner_cleanup(components):
+        descriptor = os.dup(case_fd)
+        try:
+            for component in components:
+                try:
+                    child = os.open(component, flags, dir_fd=descriptor)
+                except FileNotFoundError:
+                    return
+                info = os.fstat(child)
+                if info.st_uid != expected or stat.S_IMODE(info.st_mode) & 0o022:
+                    os.close(child)
+                    raise SystemExit("unsafe sealed UI cleanup directory")
+                os.close(descriptor)
+                descriptor = child
+            info = os.fstat(descriptor)
+            os.fchmod(descriptor, stat.S_IMODE(info.st_mode) | stat.S_IWUSR | stat.S_IXUSR)
+        finally:
+            os.close(descriptor)
+
+    fixed = ("usr", "local", "share", "pgw", "web")
+    for prefix in (("source",), ("stage", "files")):
+        grant_owner_cleanup(prefix + fixed + ("static",))
+        grant_owner_cleanup(prefix + fixed)
+    named = os.stat(name, dir_fd=temp_fd, follow_symlinks=False)
+    if (named.st_dev, named.st_ino) != (case_info.st_dev, case_info.st_ino):
+        raise SystemExit("sealed UI cleanup case identity changed")
+    os.close(case_fd)
+    case_fd = -1
+    shutil.rmtree(name, dir_fd=temp_fd)
+    try:
+        os.stat(name, dir_fd=temp_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    else:
+        raise SystemExit("sealed UI cleanup left residue")
+    os.fsync(temp_fd)
+finally:
+    if case_fd >= 0:
+        os.close(case_fd)
+    os.close(temp_fd)
+PY
+    if ((cleanup_rc != 0)); then
+        printf 'unsafe non-root sealed UI case cleanup\n' >&2
+        ((original_rc != 0)) || original_rc="${cleanup_rc}"
+    fi
+    exit "${original_rc}"
+}
+
+run_nonroot_sealed_ui_materialize_case() (
+    local name="$1" inject_failure="$2" fixture source snapshot stage key helper ledger_id asset
+    set -e
+    fixture="${temp_root}/sealed-ui-materialize-${name}"
+    source="${fixture}/source"
+    snapshot="${fixture}/snapshot"
+    stage="${fixture}/stage"
+    key="${fixture}/key"
+    helper="${artifact_root}/pgw-snapshot-crypt"
+    install -d -m 0700 "${fixture}"
+    trap 'cleanup_nonroot_sealed_ui_case "$?" "${fixture}"' EXIT
+    install -d -m 0700 "${snapshot}/key-sequences" \
+        "${source}/usr/local/share/pgw/web/static"
+    for asset in app.js layout.css login.js styles.css; do
+        printf 'sealed-ui-%s\n' "${asset}" >"${source}/usr/local/share/pgw/web/static/${asset}"
+    done
+    printf 'sealed-ui-manifest\n' >"${source}/usr/local/share/pgw/web/.manifest.sha256"
+    chmod 0440 "${source}/usr/local/share/pgw/web/.manifest.sha256" \
+        "${source}/usr/local/share/pgw/web/static/"*
+    chmod 0550 "${source}/usr/local/share/pgw/web" \
+        "${source}/usr/local/share/pgw/web/static"
+    chgrp -hR "$(id -g)" "${source}"
+    printf '0123456789abcdef0123456789abcdef' >"${key}"
+    chmod 0600 "${key}"
+    printf 'present\t/usr/local/share/pgw/web\n' >"${snapshot}/manifest"
+    ledger_id="$(printf '%s' key.nonroot.ui | sha256sum | awk '{print $1}')"
+    /usr/bin/python3 -I "${ROOT}/deploy/snapshot_payload.py" capture \
+        "${snapshot}" "${source}" "${key}" key.nonroot.ui "${helper}" \
+        install.nonroot.ui release.nonroot.ui \
+        "${snapshot}/key-sequences/key-sequence-${ledger_id}.json"
+    /usr/bin/python3 -I "${ROOT}/deploy/snapshot_payload.py" materialize \
+        "${snapshot}" "${key}" "${helper}" "${stage}"
+    if [[ "${inject_failure}" == 1 ]]; then
+        printf 'injected post-materialize cleanup failure\n' >&2
+        exit 86
+    fi
+    [[ "$(stat -c '%u:%g:%a' "${stage}/files/usr/local/share/pgw/web")" == \
+       "${EUID}:$(id -g):550" &&
+       "$(stat -c '%u:%g:%a' "${stage}/files/usr/local/share/pgw/web/static")" == \
+       "${EUID}:$(id -g):550" ]] \
+        || { printf 'non-root materialize did not restore sealed UI directory metadata\n' >&2; exit 1; }
+    [[ "$(stat -c '%u:%g:%a' "${stage}/files/usr/local/share/pgw/web/.manifest.sha256")" == \
+       "${EUID}:$(id -g):440" ]] \
+        || { printf 'non-root materialize did not restore sealed UI manifest metadata\n' >&2; exit 1; }
+    cmp -s "${source}/usr/local/share/pgw/web/.manifest.sha256" \
+        "${stage}/files/usr/local/share/pgw/web/.manifest.sha256" \
+        || { printf 'non-root materialize did not restore sealed UI manifest content\n' >&2; exit 1; }
+    for asset in app.js layout.css login.js styles.css; do
+        [[ "$(stat -c '%u:%g:%a' "${stage}/files/usr/local/share/pgw/web/static/${asset}")" == \
+           "${EUID}:$(id -g):440" ]] \
+            || { printf 'non-root materialize did not restore sealed UI asset metadata\n' >&2; exit 1; }
+        cmp -s "${source}/usr/local/share/pgw/web/static/${asset}" \
+            "${stage}/files/usr/local/share/pgw/web/static/${asset}" \
+            || { printf 'non-root materialize did not restore sealed UI content\n' >&2; exit 1; }
+    done
+)
+
+assert_nonroot_sealed_ui_materialize() {
+    local fixture rc
+    fixture="${temp_root}/sealed-ui-materialize-success"
+    run_nonroot_sealed_ui_materialize_case success 0
+    [[ ! -e "${fixture}" && ! -L "${fixture}" ]] \
+        || { printf 'successful sealed UI materialize left residue\n' >&2; exit 1; }
+    fixture="${temp_root}/sealed-ui-materialize-failure"
+    set +e
+    run_nonroot_sealed_ui_materialize_case failure 1
+    rc=$?
+    set -e
+    [[ "${rc}" == 86 ]] \
+        || { printf 'post-materialize cleanup injection returned %s\n' "${rc}" >&2; exit 1; }
+    [[ ! -e "${fixture}" && ! -L "${fixture}" ]] \
+        || { printf 'failed sealed UI materialize left residue\n' >&2; exit 1; }
 }
 
 run_failure() {
@@ -273,6 +435,8 @@ index=0
 if [[ "${section}" == all || "${section}" == success ]]; then
     printf 'test-only root restore-authority admission\n'
     assert_restore_authority_contract
+    printf 'non-root sealed UI encrypted materialization\n'
+    assert_nonroot_sealed_ui_materialize
     printf 'successful upgrade and explicit rollback rehearsal\n'
     fixture="${temp_root}/success-rollback"
     make_fixture "${fixture}" active
