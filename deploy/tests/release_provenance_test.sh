@@ -124,7 +124,7 @@ tool gitleaks v8.28.0
 EOF
 
 set +e
-PATH="${fixture}/fake-tools:${PATH}" /bin/bash "${ROOT}/deploy/finalize-release.sh" \
+PGW_DEBUG_XTRACE=1 PATH="${fixture}/fake-tools:${PATH}" /bin/bash "${ROOT}/deploy/finalize-release.sh" \
     "${output}" "${evidence}" "${fixture}/candidate" >"${fixture}/finalize.out" 2>"${fixture}/finalize.err"
 finalize_rc=$?
 set -e

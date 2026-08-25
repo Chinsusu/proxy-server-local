@@ -1,5 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
+[[ -z "${PGW_DEBUG_XTRACE:-}" ]] || set -x
 
 ((EUID != 0)) || { printf 'release finalization must run unprivileged\n' >&2; exit 96; }
 
