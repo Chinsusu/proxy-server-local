@@ -15,7 +15,7 @@ update_field() {
 }
 
 fake_systemctl() {
-    local operation="${1:-}" runtime=0 quiet=0 unit value config
+    local operation="${1:-}" runtime=0 quiet=0 unit value config config_uid config_mode config_links config_value
     shift || true
     case "${operation}" in
         list-units)
@@ -45,16 +45,38 @@ fake_systemctl() {
             ;;
         start|restart)
             for unit in "$@"; do
-                update_field "${unit}" 3 active
                 if [[ "${unit}" == nftables.service ]]; then
                     config="${root}/system/etc/nftables.conf"
                     [[ -f "${config}" ]] || return 2
                     sed '1{/^flush ruleset$/d;}' "${config}" >"${root}/runtime/ruleset.nft"
                 elif [[ "${unit}" == systemd-sysctl.service ]]; then
-                    grep -Eq '^net[.]ipv4[.]ip_forward[[:space:]]*=[[:space:]]*1$' \
-                        "${root}/system/etc/sysctl.d/99-pgw.conf" || return 2
-                    printf '1\n' >"${root}/runtime/ip-forward"
+                    config="${root}/system/etc/sysctl.d/99-pgw.conf"
+                    [[ ! -L "${config}" ]] || return 2
+                    if [[ -e "${config}" ]]; then
+                        [[ -f "${config}" ]] || return 2
+                        config_uid="$(/usr/bin/stat -c '%u' -- "${config}")"
+                        config_mode="$(/usr/bin/stat -c '%a' -- "${config}")"
+                        config_links="$(/usr/bin/stat -c '%h' -- "${config}")"
+                        [[ "${config_uid}" == "${EUID}" && "${config_links}" == 1 &&
+                           $((8#${config_mode} & 8#022)) == 0 ]] || return 2
+                        config_value="$(/usr/bin/awk '
+                            /^[[:space:]]*([#;]|$)/ { next }
+                            {
+                                line=$0
+                                if (line ~ /^[[:space:]]*net[.]ipv4[.]ip_forward([[:space:]]|=)/) {
+                                    if (line !~ /^[[:space:]]*net[.]ipv4[.]ip_forward[[:space:]]*=[[:space:]]*[01][[:space:]]*$/) exit 2
+                                    sub(/^[^=]*=[[:space:]]*/, "", line)
+                                    sub(/[[:space:]]*$/, "", line)
+                                    value=line
+                                    found=1
+                                }
+                            }
+                            END { if (!found) exit 3; print value }
+                        ' "${config}")" || return 2
+                        printf '%s\n' "${config_value}" >"${root}/runtime/ip-forward"
+                    fi
                 fi
+                update_field "${unit}" 3 active
             done
             ;;
         stop)

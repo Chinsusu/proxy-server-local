@@ -147,6 +147,89 @@ make_fixture() {
     cp -a -- "${fixture}/runtime" "${fixture}/expected-runtime"
 }
 
+reset_fake_sysctl_contract_state() {
+    local fixture="$1" command="$2"
+    PGW_FAKE_ROOT="${fixture}" "${command}" stop systemd-sysctl.service
+    printf '0\n' >"${fixture}/runtime/ip-forward"
+    [[ "$(awk -F '\t' '$1=="systemd-sysctl.service" {print $3}' "${fixture}/runtime/services")" == inactive &&
+       "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 0 ]]
+}
+
+assert_fake_sysctl_rejected() {
+    local fixture="$1" command="$2" label="$3" external_digest="$4" timeout_seconds="${5:-}" rc current_digest
+    reset_fake_sysctl_contract_state "${fixture}" "${command}"
+    set +e
+    if [[ -n "${timeout_seconds}" ]]; then
+        PGW_FAKE_ROOT="${fixture}" /usr/bin/timeout --signal=TERM --kill-after=1s \
+            "${timeout_seconds}s" "${command}" restart systemd-sysctl.service >/dev/null 2>&1
+    else
+        PGW_FAKE_ROOT="${fixture}" "${command}" restart systemd-sysctl.service >/dev/null 2>&1
+    fi
+    rc=$?
+    set -e
+    [[ "${rc}" == 2 ]] \
+        || { printf '%s PGW sysctl rejection returned rc=%s, expected rc=2\n' "${label}" "${rc}" >&2; exit 1; }
+    [[ "$(awk -F '\t' '$1=="systemd-sysctl.service" {print $3}' "${fixture}/runtime/services")" == inactive &&
+       "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 0 ]] \
+        || { printf '%s PGW sysctl rejection changed runtime state\n' "${label}" >&2; exit 1; }
+    current_digest="$(/usr/bin/sha256sum -- "${fixture}/outside-sysctl" | awk '{print $1}')"
+    [[ "${current_digest}" == "${external_digest}" ]] \
+        || { printf '%s PGW sysctl rejection changed external config\n' "${label}" >&2; exit 1; }
+}
+
+assert_fake_sysctl_contract() {
+    local fixture="${temp_root}/fake-sysctl-contract" command config external external_digest
+    make_fixture "${fixture}" inactive
+    command="${fixture}/fake-bin/systemctl"
+    config="${fixture}/system/etc/sysctl.d/99-pgw.conf"
+    external="${fixture}/outside-sysctl"
+    printf 'net.ipv4.ip_forward = 1\n# external sysctl sentinel\n' >"${external}"
+    external_digest="$(/usr/bin/sha256sum -- "${external}" | awk '{print $1}')"
+    [[ "${external_digest}" =~ ^[0-9a-f]{64}$ ]] \
+        || { printf 'could not capture external sysctl digest\n' >&2; exit 1; }
+
+    reset_fake_sysctl_contract_state "${fixture}" "${command}"
+    [[ ! -e "${config}" && ! -L "${config}" ]]
+    PGW_FAKE_ROOT="${fixture}" "${command}" start systemd-sysctl.service
+    [[ "$(awk -F '\t' '$1=="systemd-sysctl.service" {print $3}' "${fixture}/runtime/services")" == active &&
+       "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 0 ]] \
+        || { printf 'absent PGW sysctl config changed forwarding\n' >&2; exit 1; }
+
+    reset_fake_sysctl_contract_state "${fixture}" "${command}"
+    printf 'net.ipv4.ip_forward = 1\n' >"${config}"
+    chmod 0644 "${config}"
+    PGW_FAKE_ROOT="${fixture}" "${command}" restart systemd-sysctl.service
+    [[ "$(awk -F '\t' '$1=="systemd-sysctl.service" {print $3}' "${fixture}/runtime/services")" == active &&
+       "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 1 ]] \
+        || { printf 'present PGW sysctl config was not applied\n' >&2; exit 1; }
+
+    reset_fake_sysctl_contract_state "${fixture}" "${command}"
+    printf 'net.ipv4.ip_forward = 1\nnet.ipv4.ip_forward = 0\n' >"${config}"
+    PGW_FAKE_ROOT="${fixture}" "${command}" restart systemd-sysctl.service
+    [[ "$(awk -F '\t' '$1=="systemd-sysctl.service" {print $3}' "${fixture}/runtime/services")" == active &&
+       "$(tr -d '[:space:]' <"${fixture}/runtime/ip-forward")" == 0 ]] \
+        || { printf 'PGW sysctl last active assignment did not win\n' >&2; exit 1; }
+
+    printf 'net.ipv4.ip_forward = 1\nnet.ipv4.ip_forward = malformed\n' >"${config}"
+    chmod 0644 "${config}"
+    assert_fake_sysctl_rejected "${fixture}" "${command}" malformed "${external_digest}"
+    printf 'net.ipv4.ip_forward = 1\n' >"${config}"
+    chmod 0664 "${config}"
+    assert_fake_sysctl_rejected "${fixture}" "${command}" group-writable "${external_digest}"
+    rm -f -- "${config}"
+    ln "${external}" "${config}"
+    assert_fake_sysctl_rejected "${fixture}" "${command}" hardlink "${external_digest}"
+    rm -f -- "${config}"
+    ln -s "${external}" "${config}"
+    assert_fake_sysctl_rejected "${fixture}" "${command}" symlink "${external_digest}"
+    rm -f -- "${config}"
+    mkfifo "${config}"
+    assert_fake_sysctl_rejected "${fixture}" "${command}" special "${external_digest}" 3
+    rm -f -- "${config}"
+    # The fake's EUID check still rejects foreign ownership. Constructing that
+    # node requires privilege and is unavailable in this non-root contract.
+}
+
 assert_restore_authority_contract() {
     local fixture="${temp_root}/restore-authority-contract" command web static external rc
     make_fixture "${fixture}" inactive
@@ -434,6 +517,8 @@ PY
 
 index=0
 if [[ "${section}" == all || "${section}" == success ]]; then
+    printf 'systemd-sysctl absent/present fixture fidelity\n'
+    assert_fake_sysctl_contract
     printf 'test-only root restore-authority admission\n'
     assert_restore_authority_contract
     printf 'non-root sealed UI encrypted materialization\n'
@@ -441,6 +526,8 @@ if [[ "${section}" == all || "${section}" == success ]]; then
     printf 'successful upgrade and explicit rollback rehearsal\n'
     fixture="${temp_root}/success-rollback"
     make_fixture "${fixture}" active
+    [[ ! -e "${fixture}/expected-system/etc/sysctl.d/99-pgw.conf" &&
+       ! -L "${fixture}/expected-system/etc/sysctl.d/99-pgw.conf" ]]
     rc="$(run_failure "${fixture}" success_rollback)"
     [[ "${rc}" == 0 ]] || {
         printf 'successful upgrade/rollback rehearsal returned %s\n' "${rc}" >&2
@@ -496,6 +583,12 @@ if [[ "${section}" == all || "${section}" == boundaries ]]; then
     mode=active; ((index++)) || true
     ((index % 2 == 0)) && mode=inactive
     make_fixture "${fixture}" "${mode}"
+    if [[ "${boundary}" == after_snapshot ]]; then
+        printf 'net.ipv4.ip_forward = 1\n' >"${fixture}/system/etc/sysctl.d/99-pgw.conf"
+        chmod 0644 "${fixture}/system/etc/sysctl.d/99-pgw.conf"
+        cp -a -- "${fixture}/system/etc/sysctl.d/99-pgw.conf" \
+            "${fixture}/expected-system/etc/sysctl.d/99-pgw.conf"
+    fi
     rc="$(run_failure "${fixture}" "${boundary}")"
     [[ "${rc}" == 1 ]] || { printf 'unexpected rc %s at %s\n' "${rc}" "${boundary}" >&2; cat "${fixture}/installer.log" >&2; exit 1; }
     grep -Fq "injected failure at ${boundary}" "${fixture}/installer.log" || {
@@ -508,6 +601,11 @@ if [[ "${section}" == all || "${section}" == boundaries ]]; then
         cat "${fixture}/commands.log" >&2
         exit 1
     }
+    if [[ "${boundary}" == after_snapshot ]]; then
+        cmp -s "${fixture}/expected-system/etc/sysctl.d/99-pgw.conf" \
+            "${fixture}/system/etc/sysctl.d/99-pgw.conf" \
+            || { printf 'present PGW sysctl config was not restored\n' >&2; exit 1; }
+    fi
     [[ ! -e "${fixture}/system/usr/local/sbin/pgw-verify-base" ]]
     grep -q $'^pgw-ui.service\tenabled-runtime\tactive' "${fixture}/runtime/services"
     grep -q $'^pgw-fwd@15002.service\tenabled-runtime\tinactive' "${fixture}/runtime/services"
