@@ -38,7 +38,6 @@ for variable in "${PRODUCTION_OVERRIDES[@]}"; do
     grep -Fq "forbidden production override: ${variable}" "${fixture}/${variable}.err"
     [[ ! -e "${sentinel}" ]]
 done
-printf 'DEBUG checkpoint: PRODUCTION_OVERRIDES done\n' >&2
 printf '#!/bin/bash\nprintf "test-command\\n" >>%q\n' "${sentinel}" >"${fixture}/test-command"
 chmod 0700 "${fixture}/test-command" 2>/dev/null || true
 
@@ -53,7 +52,6 @@ done
 grep -Fxq 'test-command' "${sentinel}"
 [[ "$(wc -l <"${sentinel}")" == 9 ]]
 rm -f -- "${sentinel}"
-printf 'DEBUG checkpoint: sentinel proof done\n' >&2
 
 for variable in "${TEST_VARS[@]}"; do
     value=forbidden
@@ -67,7 +65,6 @@ for variable in "${TEST_VARS[@]}"; do
     grep -Fq "forbidden test environment: ${variable}" "${fixture}/${variable}.err"
     [[ ! -e "${sentinel}" ]]
 done
-printf 'DEBUG checkpoint: TEST_VARS done\n' >&2
 
 # The launcher marker and FD map are not an authentication mechanism by
 # themselves. A direct Bash invocation must also prove its parent executable is
@@ -82,14 +79,12 @@ set -e
 [[ "${forged_launch_rc}" == 126 ]]
 grep -Fq 'forged or invalid trusted launcher context' "${fixture}/forged-launch.err"
 [[ ! -e "${sentinel}" ]]
-printf 'DEBUG checkpoint: forged-launch done\n' >&2
 
 # A hostile inherited PATH is replaced before even dirname resolves SCRIPT_DIR.
 PATH="${fixture}/hostile" "${BASH_BINARY}" "${INSTALLER}" --dry-run \
     >"${fixture}/safe-path.out" 2>"${fixture}/safe-path.err"
 grep -Fq 'dry-run PASS' "${fixture}/safe-path.err"
 [[ ! -e "${sentinel}" ]]
-printf 'DEBUG checkpoint: safe-path done\n' >&2
 
 # Direct execution proves the kernel uses /bin/bash and each entrypoint resets
 # PATH before dirname, git, readlink or any other external command.
@@ -97,7 +92,6 @@ PATH="${fixture}/hostile" "${INSTALLER}" --dry-run \
     >"${fixture}/direct-install.out" 2>"${fixture}/direct-install.err"
 [[ "$?" == 0 ]]
 grep -Fq 'dry-run PASS' "${fixture}/direct-install.err"
-printf 'DEBUG checkpoint: direct-install done\n' >&2
 
 set +e
 PATH="${fixture}/hostile" "${UPDATE_WRAPPER}" invalid \
@@ -110,13 +104,6 @@ PATH="${fixture}/hostile" "${HARNESS}" \
     >"${fixture}/direct.harness.out" 2>"${fixture}/direct.harness.err"
 harness_rc=$?
 set -e
-
-{
-    printf 'DEBUG update_rc=%s compat_rc=%s harness_rc=%s EUID=%s\n' "${update_rc}" "${compat_rc}" "${harness_rc}" "${EUID}"
-    printf 'DEBUG deploy-update.err: '; cat "${fixture}/direct.deploy-update.err"
-    printf 'DEBUG compat-update.err: '; cat "${fixture}/direct.compat-update.err"
-    printf 'DEBUG harness.err: '; cat "${fixture}/direct.harness.err"
-} >&2
 
 [[ "${update_rc}" == 126 ]]
 [[ "${compat_rc}" == 126 ]]
@@ -134,7 +121,6 @@ else
         "${fixture}/direct.harness.err"
 fi
 [[ ! -e "${sentinel}" ]]
-printf 'DEBUG checkpoint: wrapper/harness rc checks done\n' >&2
 
 if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
     set +e

@@ -338,9 +338,7 @@ readonly NODE_BINARY
 "${NODE_BINARY}" --check "${ROOT}/web/static/app.js"
 "${NODE_BINARY}" --check "${ROOT}/web/static/login.js"
 "${NODE_BINARY}" "${ROOT}/web/static/app.pagination.test.js"
-bash "${ROOT}/deploy/tests/installer_transaction_test.sh" && itt_rc=0 || itt_rc=$?
-printf 'DEBUG installer_transaction_test.sh rc=%s\n' "${itt_rc}" >&2
-((itt_rc == 0)) || exit "${itt_rc}"
+bash "${ROOT}/deploy/tests/installer_transaction_test.sh"
 bash "${ROOT}/deploy/tests/installer_env_rejection_test.sh"
 bash "${ROOT}/deploy/tests/release_source_boundary_test.sh"
 bash "${ROOT}/deploy/tests/release_provenance_test.sh"
