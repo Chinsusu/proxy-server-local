@@ -141,7 +141,7 @@ setpriv --no-new-privs --inh-caps=-all --ambient-caps=-all \
     env -i PATH="${SAFE_PATH}" LANG=C LC_ALL=C HOME="${work}" TMPDIR="${work}" \
     PGW_TRANSACTION_SECTION=all PGW_TRANSACTION_EVIDENCE_DIR="${stage}" \
     PGW_TRANSACTION_TEMP_PARENT="${work}" \
-    /bin/bash "${snapshot}/release/deploy/tests/installer_transaction_test.sh"
+    /bin/bash "${snapshot}/source/deploy/tests/installer_transaction_test.sh"
 transaction_rc=$?
 set -e
 printf 'transaction_suite_rc=%s\n' "${transaction_rc}"
