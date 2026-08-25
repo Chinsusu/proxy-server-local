@@ -1,0 +1,24 @@
+/* pgw-agent may manage only numeric per-port Forwarder instances. */
+polkit.addRule(function(action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units" ||
+        subject.user !== "pgw-agent") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (typeof unit !== "string" || typeof verb !== "string" ||
+        ["start", "stop", "restart"].indexOf(verb) === -1) {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    var match = /^pgw-fwd@([0-9]+)\.service$/.exec(unit);
+    if (match === null) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var port = parseInt(match[1], 10);
+    if (port < 15001 || port > 15999 || String(port) !== match[1]) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    return polkit.Result.YES;
+});

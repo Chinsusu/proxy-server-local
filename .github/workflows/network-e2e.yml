@@ -1,0 +1,445 @@
+name: Network Namespace E2E
+
+on:
+  schedule:
+    - cron: "23 18 * * *"
+  workflow_dispatch:
+    inputs:
+      require_harness:
+        description: Fail unless the product namespace harness is present
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: network-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.26.7"
+  GOTOOLCHAIN: local
+
+jobs:
+  namespace-evidence:
+    name: Privileged namespace evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Prepare evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0755 "$RUNNER_TEMP/pgw-netns-evidence"
+          {
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "commit=$GITHUB_SHA"
+            echo "runner=$RUNNER_NAME"
+            echo "bootstrap=PASS"
+          } > "$RUNNER_TEMP/pgw-netns-evidence/bootstrap.txt"
+
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install namespace prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            curl \
+            iproute2 \
+            iptables \
+            iputils-ping \
+            nftables \
+            python3 \
+            tcpdump
+          sudo -n true
+
+      - name: Build test binaries
+        env:
+          CGO_ENABLED: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0755 "$RUNNER_TEMP/pgw-e2e-bin"
+          commands=(api agent fwd health ui)
+          for command in "${commands[@]}"; do
+            go build \
+              -trimpath \
+              -buildvcs=false \
+              -o "$RUNNER_TEMP/pgw-e2e-bin/pgw-${command}" \
+              "./cmd/${command}"
+          done
+
+      - name: Verify the IPv6 management liveness oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /bin/bash test/e2e/ipv6_management_oracle_test.sh
+
+      - name: Run isolated namespace harness
+        env:
+          REQUIRE_HARNESS: ${{ inputs.require_harness || false }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          evidence="$RUNNER_TEMP/pgw-netns-evidence"
+          install -d -m 0755 "$evidence"
+          run_token="$(printf '%s' "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" | sha256sum | cut -c1-10)"
+          prefix="pgw-e2e-${run_token}"
+          ns_client="${prefix}-client"
+          ns_gateway="${prefix}-gateway"
+          veth_client="pc${run_token}"
+          veth_gateway="pg${run_token}"
+          resource_manifest="$evidence/resources-${run_token}.tsv"
+          product_artifacts="$RUNNER_TEMP/pgw-e2e-product-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          harness=""
+          if [[ -f "test/e2e/netns_legacy_web_only.sh" ]]; then
+            harness="test/e2e/netns_legacy_web_only.sh"
+          elif [[ -f "test/e2e/netns/run.sh" ]]; then
+            harness="test/e2e/netns/run.sh"
+          fi
+
+          cleanup() {
+            exit_rc=$?
+            cleanup_rc=0
+            set +e
+            sudo ip netns list > "$evidence/namespaces-before-cleanup.txt" 2>&1
+            if [[ -f "$resource_manifest" ]]; then
+              while IFS=$'\t' read -r resource_type resource_name; do
+                [[ -n "$resource_type" && -n "$resource_name" ]] || continue
+                [[ "$resource_name" == *"$run_token"* ]] || {
+                  echo "refusing cleanup without current run token: $resource_type $resource_name" \
+                    >> "$evidence/cleanup.log"
+                  cleanup_rc=1
+                  continue
+                }
+                case "$resource_type" in
+                  netns)
+                    sudo ip netns delete "$resource_name" >> "$evidence/cleanup.log" 2>&1
+                    ;;
+                  link)
+                    sudo ip link delete "$resource_name" >> "$evidence/cleanup.log" 2>&1
+                    ;;
+                  *)
+                    echo "refusing unknown resource type: $resource_type" \
+                      >> "$evidence/cleanup.log"
+                    cleanup_rc=1
+                    ;;
+                esac
+              done < "$resource_manifest"
+            fi
+            sudo ip netns list | awk '{print $1}' \
+              > "$evidence/namespaces-after-cleanup.txt" 2>&1
+            ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 \
+              > "$evidence/interfaces-after-cleanup.txt" 2>&1
+            while IFS=$'\t' read -r resource_type resource_name; do
+              [[ -n "$resource_type" && -n "$resource_name" ]] || continue
+              case "$resource_type" in
+                netns)
+                  if grep -Fxq "$resource_name" "$evidence/namespaces-after-cleanup.txt"; then
+                    cleanup_rc=1
+                  fi
+                  ;;
+                link)
+                  if grep -Fxq "$resource_name" "$evidence/interfaces-after-cleanup.txt"; then
+                    cleanup_rc=1
+                  fi
+                  ;;
+              esac
+            done < "$resource_manifest"
+            if [[ "$cleanup_rc" -ne 0 ]]; then
+              echo "cleanup=FAILED" >> "$evidence/summary.txt"
+              exit_rc=1
+            else
+              echo "cleanup=PASS" >> "$evidence/summary.txt"
+            fi
+            echo "exit_code=$exit_rc" >> "$evidence/summary.txt"
+            exit "$exit_rc"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          {
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "commit=$GITHUB_SHA"
+            echo "runner=$RUNNER_NAME"
+            echo "run_token=$run_token"
+            echo "namespace_prefix=$prefix"
+            echo "product_artifact_dir=$product_artifacts"
+          } > "$evidence/summary.txt"
+
+          printf 'netns\t%s\n' "$ns_client" "$ns_gateway" > "$resource_manifest"
+          printf 'link\t%s\n' "$veth_client" "$veth_gateway" >> "$resource_manifest"
+
+          uname -a > "$evidence/uname.txt"
+          go version > "$evidence/go-version.txt"
+          nft --version > "$evidence/nft-version.txt"
+          ip -Version > "$evidence/ip-version.txt" 2>&1
+          sha256sum "$RUNNER_TEMP"/pgw-e2e-bin/pgw-* > "$evidence/binary-sha256.txt"
+
+          sudo ip netns add "$ns_client"
+          sudo ip netns add "$ns_gateway"
+          sudo ip link add "$veth_client" type veth peer name "$veth_gateway"
+          sudo ip link set "$veth_client" netns "$ns_client"
+          sudo ip link set "$veth_gateway" netns "$ns_gateway"
+          sudo ip -n "$ns_client" link set "$veth_client" name eth0
+          sudo ip -n "$ns_gateway" link set "$veth_gateway" name eth0
+          sudo ip -n "$ns_client" address add 10.254.0.2/30 dev eth0
+          sudo ip -n "$ns_gateway" address add 10.254.0.1/30 dev eth0
+          sudo ip -n "$ns_client" link set lo up
+          sudo ip -n "$ns_gateway" link set lo up
+          sudo ip -n "$ns_client" link set eth0 up
+          sudo ip -n "$ns_gateway" link set eth0 up
+          sudo ip netns exec "$ns_client" ping -c 1 -W 2 10.254.0.1 \
+            > "$evidence/namespace-connectivity.txt"
+
+          sudo ip netns exec "$ns_gateway" nft -c -f - <<'NFT'
+          table inet pgw_e2e_preflight {
+            chain input {
+              type filter hook input priority 0; policy accept;
+              ip protocol icmp counter accept
+            }
+          }
+          NFT
+          sudo ip netns exec "$ns_gateway" nft -f - <<'NFT'
+          table inet pgw_e2e_preflight {
+            chain input {
+              type filter hook input priority 0; policy accept;
+              ip protocol icmp counter accept
+            }
+          }
+          NFT
+          sudo ip netns exec "$ns_gateway" nft -j list ruleset \
+            > "$evidence/preflight-ruleset.json"
+          echo "runner_preflight=PASS" >> "$evidence/summary.txt"
+          sudo ip netns delete "$ns_client"
+          sudo ip netns delete "$ns_gateway"
+          echo "runner_preflight_cleanup=PASS" >> "$evidence/summary.txt"
+
+          if [[ -n "$harness" ]]; then
+            base_kill_switch=1
+            set +e
+            sudo -n env \
+              PATH="$PATH" \
+              GOTOOLCHAIN="$GOTOOLCHAIN" \
+              GOMODCACHE="$(go env GOMODCACHE)" \
+              GOCACHE="$RUNNER_TEMP/pgw-e2e-root-cache" \
+              PGW_E2E_REQUIRE_BASE_KILL_SWITCH="1" \
+              PGW_E2E_RUN_TOKEN="$run_token" \
+              PGW_E2E_RESOURCE_MANIFEST="$resource_manifest" \
+              PGW_E2E_ARTIFACT_DIR="$product_artifacts" \
+              PGW_E2E_PREFIX="$prefix" \
+              PGW_EVIDENCE_DIR="$evidence" \
+              PGW_E2E_BIN_DIR="$RUNNER_TEMP/pgw-e2e-bin" \
+              bash "$harness" 2>&1 | tee "$evidence/harness.log"
+            harness_rc=${PIPESTATUS[0]}
+            set -e
+            echo "product_harness=RUN" >> "$evidence/summary.txt"
+            echo "product_harness_path=$harness" >> "$evidence/summary.txt"
+            echo "product_harness_exit=$harness_rc" >> "$evidence/summary.txt"
+
+            if [[ "$harness_rc" -eq 0 ]]; then
+              artifact_inventory="$evidence/product-artifact-inventory.txt"
+              manifest_file="$product_artifacts/product-manifest.txt"
+              if [[ -d "$product_artifacts" ]]; then
+                find "$product_artifacts" -maxdepth 1 -type f -printf '%f\n' \
+                  | sort > "$artifact_inventory"
+              else
+                : > "$artifact_inventory"
+              fi
+
+              evidence_error() {
+                echo "product_evidence_error=$1" >> "$evidence/summary.txt"
+                harness_rc=1
+              }
+
+              declare -A product_manifest=()
+              if [[ ! -f "$manifest_file" ]]; then
+                evidence_error "missing_manifest"
+              else
+                while IFS='=' read -r key value; do
+                  if [[ ! "$key" =~ ^[a-z][a-z0-9_]*$ || -z "$value" ]]; then
+                    evidence_error "invalid_manifest_entry"
+                    continue
+                  fi
+                  if [[ -v "product_manifest[$key]" ]]; then
+                    evidence_error "duplicate_manifest_key:$key"
+                    continue
+                  fi
+                  product_manifest["$key"]="$value"
+                done < "$manifest_file"
+              fi
+
+              required_keys=(
+                format
+                renderer
+                rendered_sha256
+                run_token
+                namespace_prefix
+                counter_mode
+                require_base_kill_switch
+                client_namespace
+                gateway_namespace
+                wan_namespace
+                client_veth
+                gateway_lan_veth
+                gateway_wan_veth
+                wan_veth
+                rendered_ruleset
+                applied_ruleset_json
+                counters
+                probe_log
+              )
+              for key in "${required_keys[@]}"; do
+                [[ -n "${product_manifest[$key]:-}" ]] || evidence_error "missing_manifest_key:$key"
+              done
+
+              expected_evidence_format="$(< test/e2e/EVIDENCE_FORMAT)"
+              [[ "$expected_evidence_format" =~ ^pgw-wave[0-9]+-e2e-v[0-9]+$ ]] || \
+                evidence_error "invalid_repository_evidence_format"
+              [[ "${product_manifest[format]:-}" == "$expected_evidence_format" ]] || \
+                evidence_error "invalid_manifest_format"
+              [[ "${product_manifest[run_token]:-}" == "$run_token" ]] || \
+                evidence_error "manifest_run_token_mismatch"
+              [[ "${product_manifest[namespace_prefix]:-}" == "$prefix" ]] || \
+                evidence_error "manifest_namespace_prefix_mismatch"
+              [[ "${product_manifest[rendered_sha256]:-}" =~ ^[0-9a-f]{64}$ ]] || \
+                evidence_error "invalid_rendered_sha256"
+
+              manifest_base_kill_switch="${product_manifest[require_base_kill_switch]:-}"
+              case "$manifest_base_kill_switch" in
+                1|true)
+                  manifest_base_kill_switch=1
+                  ;;
+                0|false)
+                  manifest_base_kill_switch=0
+                  ;;
+                *)
+                  evidence_error "invalid_manifest_base_kill_switch"
+                  ;;
+              esac
+              [[ "$manifest_base_kill_switch" == "$base_kill_switch" ]] || \
+                evidence_error "manifest_base_kill_switch_mismatch"
+
+              declare -A expected_resources=(
+                [client_namespace]="netns:${prefix}-product-client"
+                [gateway_namespace]="netns:${prefix}-product-gateway"
+                [wan_namespace]="netns:${prefix}-product-wan"
+                [client_veth]="link:cl${run_token}"
+                [gateway_lan_veth]="link:gl${run_token}"
+                [gateway_wan_veth]="link:gw${run_token}"
+                [wan_veth]="link:we${run_token}"
+              )
+              for key in "${!expected_resources[@]}"; do
+                resource_type="${expected_resources[$key]%%:*}"
+                expected_name="${expected_resources[$key]#*:}"
+                actual_name="${product_manifest[$key]:-}"
+                [[ "$actual_name" == "$expected_name" ]] || \
+                  evidence_error "invalid_product_resource:$key"
+                if ! grep -Fqx "$resource_type"$'\t'"$actual_name" "$resource_manifest"; then
+                  evidence_error "unregistered_product_resource:$key"
+                fi
+              done
+
+              rendered_name="${product_manifest[rendered_ruleset]:-}"
+              ruleset_name="${product_manifest[applied_ruleset_json]:-}"
+              counters_name="${product_manifest[counters]:-}"
+              probe_name="${product_manifest[probe_log]:-}"
+              for artifact_name in "$rendered_name" "$ruleset_name" "$counters_name" "$probe_name"; do
+                if [[ -z "$artifact_name" || "$artifact_name" != "$(basename -- "$artifact_name")" ]]; then
+                  evidence_error "invalid_artifact_reference"
+                fi
+              done
+
+              rendered_file="$product_artifacts/$rendered_name"
+              ruleset_file="$product_artifacts/$ruleset_name"
+              counters_file="$product_artifacts/$counters_name"
+              probe_file="$product_artifacts/$probe_name"
+              for artifact_file in "$rendered_file" "$ruleset_file" "$counters_file" "$probe_file"; do
+                [[ -f "$artifact_file" && ! -L "$artifact_file" && -s "$artifact_file" ]] || \
+                  evidence_error "invalid_artifact_file:$(basename -- "$artifact_file")"
+              done
+
+              if [[ -f "$rendered_file" ]]; then
+                actual_rendered_sha256="$(sha256sum "$rendered_file" | cut -d' ' -f1)"
+                [[ "$actual_rendered_sha256" == "${product_manifest[rendered_sha256]:-}" ]] || \
+                  evidence_error "rendered_sha256_mismatch"
+              fi
+
+              if [[ -f "$ruleset_file" ]] && ! jq -e '
+                ((.nftables | type) == "array") and
+                ((.nftables | length) > 0) and
+                ([.nftables[]? | .table? | select(type == "object")] | length > 0) and
+                ([.nftables[]? | .chain? | select(type == "object")] | length > 0) and
+                ([.nftables[]? | .rule? | select(type == "object")] | length > 0)
+              ' "$ruleset_file" >/dev/null; then
+                evidence_error "invalid_or_empty_ruleset_json"
+              fi
+
+              counter_mode="${product_manifest[counter_mode]:-}"
+              [[ "$counter_mode" == "required" ]] || \
+                evidence_error "counter_mode_must_be_required"
+              if [[ -f "$counters_file" ]]; then
+                if ! jq -e '
+                  def counters:
+                    [.nftables[]? |
+                      if ((.counter? | type) == "object") then
+                        .counter
+                      elif ((.rule? | type) == "object") then
+                        .rule.expr[]? | .counter? | select(type == "object")
+                      else
+                        empty
+                      end |
+                      select(length > 0)];
+                  ((.nftables | type) == "array") and
+                  ((.nftables | length) > 0) and
+                  ((counters | length) > 0)
+                ' "$counters_file" >/dev/null; then
+                  evidence_error "invalid_or_empty_required_counter_json"
+                elif [[ "$counter_mode" == "required" ]]; then
+                  echo "counter_evidence=PASS:required" >> "$evidence/summary.txt"
+                fi
+              fi
+
+              if [[ "$harness_rc" -eq 0 ]]; then
+                echo "product_evidence_validation=PASS" >> "$evidence/summary.txt"
+              else
+                echo "product_evidence_validation=FAILED" >> "$evidence/summary.txt"
+              fi
+            fi
+            exit "$harness_rc"
+          fi
+
+          echo "product_harness=NOT_IMPLEMENTED" >> "$evidence/summary.txt"
+          echo "The runner/netns/nft orchestration passed; no PGW product claim is made." \
+            > "$evidence/HARNESS_NOT_IMPLEMENTED.txt"
+          if [[ "$REQUIRE_HARNESS" == "true" ]]; then
+            exit 2
+          fi
+
+      - name: Upload namespace evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: network-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/pgw-netns-evidence/
+            ${{ runner.temp }}/pgw-e2e-product-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 14

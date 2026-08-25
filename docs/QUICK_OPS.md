@@ -1,70 +1,53 @@
-# PGW Quick Operations Checklist (Ubuntu 22.04)
+# PGW v2 Quick Ops
 
-0) One-click install
+## Trạng thái control plane
 
-Ubuntu 22.04 – run:
+```bash
+systemctl status nftables.service systemd-sysctl.service --no-pager
+systemctl status pgw-api.service pgw-agent.service pgw-ui.service pgw-health.service --no-pager
+systemctl list-units --all 'pgw-fwd@*.service'
+curl --fail http://127.0.0.1:9090/healthz
+curl --fail http://127.0.0.1:9090/metrics
+```
 
+## Trạng thái data plane
 
+```bash
+sudo /usr/local/sbin/pgw-verify-base
+nft list table inet pgw_base
+nft list table inet pgw_dynamic
+ss -lntp
+```
 
+Không sửa rule trực tiếp. Nếu desired/applied generation lệch, kiểm tra log
+Agent và audit API; Agent sẽ reconcile/LKG theo worker queue.
 
-1) System prep
-- Ensure packages: nftables, dnsmasq
-- Sysctl: /etc/sysctl.d/99-pgw.conf
-  - net.ipv4.ip_forward=1
-  - net.ipv4.conf.all.rp_filter=0
-  - net.ipv4.conf.default.rp_filter=0
-  - (Optional) disable IPv6 host-wide for simplicity
-- Apply: sysctl --system
+## Store và log
 
-2) Env file (/etc/pgw/pgw.env)
-- PGW_JWT_SECRET=...
-- PGW_API_ADDR=:8080
-- PGW_AGENT_ADDR=:9090
-- PGW_UI_ADDR=:8081
-- PGW_WAN_IFACE=eth0
-- PGW_LAN_IFACE=ens19
-- PGW_FORWARDER_BASE_PORT=15001
-- PGW_FWD_MAX_PORT=15999
-- (Important) PGW_AGENT_TOKEN=... (random)
+```bash
+sqlite3 /var/lib/pgw/pgw.db 'PRAGMA integrity_check;'
+journalctl -u pgw-agent.service -u pgw-api.service --since '-15 min' --no-pager
+journalctl -u 'pgw-fwd@*.service' --since '-15 min' --no-pager
+```
 
-3) Build & install
-- make build or:
-  - go build -o bin/pgw-api   ./cmd/api
-  - go build -o bin/pgw-agent ./cmd/agent
-  - go build -o bin/pgw-ui    ./cmd/ui
-  - go build -o bin/pgw-fwd   ./cmd/fwd
-- install -m 0755 bin/pgw-* /usr/local/bin/
+Không dump credential, token hoặc ciphertext vào ticket/log. SQLite backup và
+restore chỉ chạy qua lifecycle transaction khi writer đã dừng.
 
-4) Services (systemd)
-- Enable/Start: pgw-api, pgw-agent, pgw-ui
-- pgw-agent must have CAP_NET_ADMIN (AmbientCapabilities)
-- (Optional) pgw-health
+## Update / rollback
 
-5) DNS for LAN clients
-- dnsmasq on gateway 192.168.2.1:53 (ens19)
-- Consider filter-AAAA to avoid IPv6 timeouts
+```bash
+sudo /usr/local/sbin/pgw-release-launcher --dry-run
+sudo /usr/local/sbin/pgw-release-launcher
+sudo /usr/local/sbin/pgw-release-launcher --rollback /var/backups/pgw/install.XXXXXXXX
+```
 
-6) Create resources
-- Create Proxy (type=http, host:port, username/password, enabled=true)
-- Health check Proxy → expect OK/DEGRADED
-- Create Client (IPv4 only, /32)
-- Create Mapping (client ↔ proxy)
+Không copy binary/DB thủ công và không restart instance Forwarder ngoài Agent.
+Trong sự cố, bảo toàn base kill-switch và management/OOB; ưu tiên fail-close.
 
-7) Verify apply
-- Forwarder: systemctl status pgw-fwd@<port> (active)
-- nftables:
-  - nft list table ip pgw | grep "ip saddr <client> ... redirect to :<port>"
-  - nft list table inet pgw_filter (DROP LAN→WAN, allow DNS 53 and port)
-- Traffic from client (192.168.2.X):
-  - DNS: nslookup icanhazip.com 192.168.2.1
-  - HTTP/S: curl https://icanhazip.com → exit IP = proxy IP
+## Canary sau thay đổi
 
-8) Cleanup
-- Delete mapping → agent reconcile → rules removed
-- If port unused → system stops pgw-fwd@<port>
-
-9) Troubleshooting
-- Logs: journalctl -u pgw-api|pgw-agent|pgw-fwd@<port> -n 200 --no-pager
-- Verify env: /etc/pgw/pgw.env
-- Confirm interfaces match real NICs (eth0/ens19)
-
+1. Xác minh base table và `ip_forward`.
+2. Đăng nhập `https://PGW_DNS_NAME:8081/login`.
+3. Với client canary, xác minh exit IP đúng proxy và destination/proxy log.
+4. Xác minh client chưa mapping, UDP, IPv6 và TCP ngoài policy bị chặn.
+5. Soak tối thiểu 30 phút; rollback nếu xuất hiện direct-WAN hoặc state/hash sai.

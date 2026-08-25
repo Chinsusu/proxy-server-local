@@ -1,22 +1,51 @@
 [Unit]
-Description=PGW Agent
-After=network-online.target pgw-api.service
+Description=PGW privileged data-plane Agent
+After=network-online.target nftables.service systemd-sysctl.service pgw-api.service
 Wants=network-online.target
+Requires=nftables.service systemd-sysctl.service pgw-api.service
 
 [Service]
-User=pgw
-Group=pgw
+User=pgw-agent
+Group=pgw-agent
+SupplementaryGroups=pgw-control pgw-fwd
 EnvironmentFile=/etc/pgw/pgw.env
+Environment=PGW_AGENT_ADDR=127.0.0.1:9090
+Environment=PGW_AGENT_SOCKET=/run/pgw/control/api-agent.sock
+Environment=PGW_FORWARDER_RUNTIME_ROOT=/run/pgw/forwarders
+Environment=PGW_LKG_DIRECTORY=/var/lib/pgw/rules
+LoadCredential=agent_service_token:/etc/pgw/agent.token
 ExecStart=/usr/local/bin/pgw-agent
-Restart=always
+Restart=on-failure
 RestartSec=2s
-
-# Resource Limits
+UMask=0027
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadWritePaths=/run/pgw/forwarders /run/pgw/agent-rollback /var/lib/pgw/rules
 LimitNOFILE=65536
 MemoryMax=256M
 TasksMax=2048
-
-# Logging
 StandardOutput=journal
 StandardError=journal
 

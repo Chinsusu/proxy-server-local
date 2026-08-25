@@ -1,0 +1,20 @@
+add table inet pgw_base
+add counter inet pgw_base wan_lan_established_accept_total
+add counter inet pgw_base ipv6_policy_drop_total
+add counter inet pgw_base udp_policy_drop_total
+add counter inet pgw_base lan_wan_direct_drop_total
+add counter inet pgw_base dns_input_accept_total
+add counter inet pgw_base management_input_accept_total
+add counter inet pgw_base management_input_drop_total
+add chain inet pgw_base forward_guard { type filter hook forward priority -10; policy accept; }
+add rule inet pgw_base forward_guard iifname "wan0" oifname "lan0" ct state established,related counter name wan_lan_established_accept_total accept
+add rule inet pgw_base forward_guard iifname "lan0" meta nfproto ipv6 counter name ipv6_policy_drop_total drop
+add rule inet pgw_base forward_guard iifname "lan0" oifname "wan0" meta l4proto udp counter name udp_policy_drop_total drop
+add rule inet pgw_base forward_guard iifname "lan0" oifname "wan0" counter name lan_wan_direct_drop_total drop
+add chain inet pgw_base input_guard { type filter hook input priority -10; policy accept; }
+add rule inet pgw_base input_guard iifname "lan0" udp dport 53 counter name dns_input_accept_total accept
+add rule inet pgw_base input_guard iifname "lan0" tcp dport 53 counter name dns_input_accept_total accept
+add rule inet pgw_base input_guard meta nfproto ipv6 tcp dport { 8080, 8081 } counter name management_input_drop_total drop
+add rule inet pgw_base input_guard meta nfproto ipv4 iifname "lan0" tcp dport { 8080, 8081 } counter name management_input_accept_total accept
+add rule inet pgw_base input_guard meta nfproto ipv4 iifname "lo" tcp dport { 8080, 8081 } accept
+add rule inet pgw_base input_guard meta nfproto ipv4 iifname != "lan0" tcp dport { 8080, 8081 } counter name management_input_drop_total drop

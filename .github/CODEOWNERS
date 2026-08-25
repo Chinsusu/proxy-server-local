@@ -1,0 +1,11 @@
+# Default owner. CODEOWNERS is a review-routing minimum, not a substitute for
+# the additional high-risk approval gates in docs/GIT_WORKFLOW.md.
+* @Chinsusu
+
+# Security- and availability-sensitive data-plane paths.
+/cmd/agent/ @Chinsusu
+/cmd/fwd/ @Chinsusu
+/pkg/auth/ @Chinsusu
+/pkg/store/ @Chinsusu
+/deploy/ @Chinsusu
+/.github/ @Chinsusu

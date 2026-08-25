@@ -5,9 +5,9 @@ import "time"
 type ProxyStatus string
 
 const (
-	StatusOK      ProxyStatus = "OK"
-	StatusDegraded            = "DEGRADED"
-	StatusDown                = "DOWN"
+	StatusOK       ProxyStatus = "OK"
+	StatusDegraded             = "DEGRADED"
+	StatusDown                 = "DOWN"
 )
 
 type Proxy struct {

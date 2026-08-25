@@ -14,7 +14,7 @@
 - **Critical: `ListMappings` bug** — PENDING mappings were invisible because `append` was incorrectly nested inside `if m.LastAppliedAt != nil` block in `memoryStore`. New mappings now appear immediately in UI and Agent.
 
 ### Security
-- **JWT secret validation at startup** — API refuses to start if `PGW_JWT_SECRET` is the insecure default (`dev-change-me`) or shorter than 32 characters. Bypass with `PGW_JWT_STRICT=false` for development.
+- **JWT secret validation at startup** — API loads a 32-byte-or-longer key only from the `jwt_secret` systemd credential or an owner-only fallback file. `PGW_JWT_SECRET` and `PGW_JWT_STRICT` are rejected; no development bypass exists.
 - **Login rate limiting** — 5 failed login attempts per IP within 15 minutes triggers `429 Too Many Requests`.
 - **Request body size limits** — All POST endpoints now enforce 1 MB max body via `http.MaxBytesReader`.
 

@@ -11,8 +11,8 @@ Generated: 2025-08-29 03:50
 ## B. Environment
 - [ ] Target host Ubuntu 22.04 with eth0 (WAN) and ens19 (LAN 192.168.2.1/24)
 - [ ] nftables installed and enabled
-- [ ] Postgres or SQLite decision finalized
-- [ ] NATS (or Redis streams) choice finalized
+- [ ] SQLite path, migration manifest and integrity gates reviewed
+- [ ] API-Agent UDS ownership and scoped token reviewed
 
 ## C. Docs & Scope
 - [ ] Read **SCOPE_LOCK_v1.1.md** and **Definition of Done** in **ROADMAP.md**
@@ -22,10 +22,10 @@ Generated: 2025-08-29 03:50
 ## D. Non-code Assets
 - [ ] Create issue templates and PR template in GitHub
 - [ ] Create environment template file from **ENV_TEMPLATE.env**
-- [ ] Copy **deploy/systemd/** units and **deploy/docker-compose.yml** if applicable
+- [ ] Validate committed **deploy/systemd/** units with `systemd-analyze`
 
 ## E. Dry-run
-- [ ] Bring up Postgres + NATS (docker compose) — see **DEPLOYMENT_GUIDE.md**
+- [ ] Run transactional installer preflight — see **deploy.md**
 - [ ] Import **DB_SCHEMA.sql**
 - [ ] Smoke test: nftables table `inet pgw` can be created (no conflicts)
 - [ ] Prepare client VM in 192.168.2.0/24 for later e2e test

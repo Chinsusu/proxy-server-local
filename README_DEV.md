@@ -26,3 +26,15 @@ make run-fwd
 ## Notes
 - Store/events are in-memory/no-op to keep skeleton portable.
 - Implement nftables, NATS, Postgres according to Docs Pack v1.1.
+
+## Contributor workflow
+
+Start with [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md). The mandatory rules
+are documented in:
+
+- [`docs/CODING_STANDARDS.md`](docs/CODING_STANDARDS.md)
+- [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md)
+- [`docs/CI.md`](docs/CI.md)
+
+The Go version is defined by `go.mod`. Full build and test verification is
+Linux-only because the Forwarder uses Linux socket APIs.

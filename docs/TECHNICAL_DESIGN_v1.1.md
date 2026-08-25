@@ -1,6 +1,11 @@
 
 # Proxy Gateway Manager — Technical Design v1.1
 
+> **Historical, superseded:** retained only for design archaeology. It is not a
+> production contract or runbook. PGW v2 uses SQLite, protected API-Agent UDS,
+> systemd credentials and Agent-only nftables/Forwarder lifecycle as defined in
+> `architecture.md`.
+
 Target OS: Ubuntu 22.04
 Interfaces: eth0 = WAN, ens19 = LAN (192.168.2.1/24)
 Goal: Each LAN client egresses ONLY via its mapped upstream proxy. If that proxy is DOWN, the client is immediately blocked (no WAN fallback). Health is polled every 30s; exit IP and latency are recorded.

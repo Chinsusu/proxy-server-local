@@ -1,0 +1,21 @@
+add table ip pgw
+add chain ip pgw prerouting { type nat hook prerouting priority dstnat; policy accept; }
+add rule ip pgw prerouting iifname "lan0" ip saddr 192.168.2.101/32 tcp dport {80,443} redirect to :15001
+add rule ip pgw prerouting iifname "lan0" ip saddr 192.168.2.128/25 tcp dport {80,443} redirect to :15002
+add table inet pgw_filter
+add chain inet pgw_filter forward { type filter hook forward priority 0; policy accept; }
+add rule inet pgw_filter forward ct state established,related accept
+add rule inet pgw_filter forward iifname "lan0" oifname "wan0" meta nfproto ipv6 drop
+add rule inet pgw_filter forward ip saddr 192.168.2.101/32 oifname "wan0" drop
+add rule inet pgw_filter forward ip saddr 192.168.2.101/32 meta l4proto udp drop
+add rule inet pgw_filter forward ip saddr 192.168.2.128/25 oifname "wan0" drop
+add rule inet pgw_filter forward ip saddr 192.168.2.128/25 meta l4proto udp drop
+add chain inet pgw_filter input { type filter hook input priority 0; policy accept; }
+add rule inet pgw_filter input ct state established,related accept
+add rule inet pgw_filter input iifname "lan0" ip saddr 192.168.2.101/32 udp dport 53 accept
+add rule inet pgw_filter input iifname "lan0" ip saddr 192.168.2.101/32 tcp dport 53 accept
+add rule inet pgw_filter input iifname "lan0" ip saddr 192.168.2.101/32 tcp dport 15001 accept
+add rule inet pgw_filter input iifname "lan0" ip saddr 192.168.2.128/25 udp dport 53 accept
+add rule inet pgw_filter input iifname "lan0" ip saddr 192.168.2.128/25 tcp dport 53 accept
+add rule inet pgw_filter input iifname "lan0" ip saddr 192.168.2.128/25 tcp dport 15002 accept
+add rule inet pgw_filter input iifname "lan0" tcp dport 15001-15999 drop

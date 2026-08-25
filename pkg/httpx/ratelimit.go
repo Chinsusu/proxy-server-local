@@ -9,13 +9,14 @@ import (
 type LoginRateLimiter struct {
 	mu       sync.Mutex
 	attempts map[string]*attemptInfo
+	reserved map[string]bool
 	maxFails int
 	window   time.Duration
 }
 
 type attemptInfo struct {
-	count    int
-	firstAt  time.Time
+	count   int
+	firstAt time.Time
 }
 
 // NewLoginRateLimiter creates a rate limiter that locks out after maxFails
@@ -23,6 +24,7 @@ type attemptInfo struct {
 func NewLoginRateLimiter(maxFails int, window time.Duration) *LoginRateLimiter {
 	rl := &LoginRateLimiter{
 		attempts: make(map[string]*attemptInfo),
+		reserved: make(map[string]bool),
 		maxFails: maxFails,
 		window:   window,
 	}
@@ -35,6 +37,22 @@ func NewLoginRateLimiter(maxFails int, window time.Duration) *LoginRateLimiter {
 		}
 	}()
 	return rl
+}
+
+// Reserve atomically admits one in-flight password verification for an IP.
+// The release closure is safe to defer. limited distinguishes lockout (429)
+// from an in-flight per-IP reservation (deterministic overload response).
+func (rl *LoginRateLimiter) Reserve(ip string) (release func(), admitted, limited bool) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if info, ok := rl.attempts[ip]; ok && time.Since(info.firstAt) <= rl.window && info.count >= rl.maxFails {
+		return nil, false, true
+	}
+	if rl.reserved[ip] {
+		return nil, false, false
+	}
+	rl.reserved[ip] = true
+	return func() { rl.mu.Lock(); delete(rl.reserved, ip); rl.mu.Unlock() }, true, false
 }
 
 // Allow checks if the given IP is allowed to attempt login.

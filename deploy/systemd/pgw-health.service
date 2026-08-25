@@ -1,22 +1,44 @@
 [Unit]
-Description=PGW Health
+Description=PGW health monitor
 After=network-online.target pgw-api.service
 Wants=network-online.target
+Requires=pgw-api.service
 
 [Service]
-User=pgw
-Group=pgw
+User=pgw-health
+Group=pgw-health
 EnvironmentFile=/etc/pgw/pgw.env
 ExecStart=/usr/local/bin/pgw-health
-Restart=always
+Restart=on-failure
 RestartSec=10s
-
-# Resource Limits
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 LimitNOFILE=4096
 MemoryMax=64M
 TasksMax=512
-
-# Logging
 StandardOutput=journal
 StandardError=journal
 

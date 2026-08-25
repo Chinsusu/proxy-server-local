@@ -3,860 +3,360 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
+	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
+	"github.com/Chinsusu/proxy-server-local/internal/secret"
 	"github.com/Chinsusu/proxy-server-local/pkg/auth"
-	"github.com/Chinsusu/proxy-server-local/pkg/check"
 	"github.com/Chinsusu/proxy-server-local/pkg/config"
 	"github.com/Chinsusu/proxy-server-local/pkg/httpx"
-	"github.com/Chinsusu/proxy-server-local/pkg/logging"
-	"github.com/Chinsusu/proxy-server-local/pkg/store"
-	"github.com/Chinsusu/proxy-server-local/pkg/types"
+	"github.com/Chinsusu/proxy-server-local/pkg/observability"
 )
 
+// main wires the SQLite-backed control plane and the migration-window v1
+// facade. No legacy file store is opened, polled, or used by the API process.
 func main() {
-	cfg := config.LoadAPI()
-	config.ValidateJWTSecret(cfg.JWTSecret)
+	observer := observability.New("pgw-api", os.Stdout)
+	if handled, err := runLegacyImportCommand(os.Args[1:], os.Stdout); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "pgw-api:", redactLegacyImportError(err))
+			os.Exit(2)
+		}
+		return
+	}
+	if handled, err := runAdminPasswordHashCommand(os.Args[1:], os.Stdin, os.Stdout); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "pgw-api hash-admin-password:", err)
+			os.Exit(2)
+		}
+		return
+	}
+	if len(os.Args) != 1 {
+		fmt.Fprintln(os.Stderr, "pgw-api: unsupported arguments")
+		os.Exit(2)
+	}
+	cfg, err := config.LoadAPI()
+	if err != nil {
+		observer.Logger.Log(context.Background(), "error", "startup_failed", map[string]any{"reason_code": "configuration"})
+		os.Exit(1)
+	}
+	defer zeroBytes(cfg.JWTSecret)
+	defer zeroBytes(cfg.AdminPassHash)
+	defer zeroBytes(cfg.UIProxyToken)
+	uiProxyVerifier, err := httpx.NewProxyIdentityVerifier(cfg.UIProxyToken)
+	if err != nil {
+		observer.Logger.Log(context.Background(), "error", "startup_failed", map[string]any{"reason_code": "ui_proxy_identity"})
+		os.Exit(1)
+	}
+	defer uiProxyVerifier.Close()
+	v2, repository, err := openV2Server(context.Background(), cfg, observer)
+	if err != nil {
+		observer.Logger.Log(context.Background(), "error", "startup_failed", map[string]any{"reason_code": "control_plane"})
+		os.Exit(1)
+	}
+	defer func() {
+		v2.Close()
+		_ = repository.Close()
+	}()
+	stopAgentSocket, err := startAgentSocket(v2)
+	if err != nil {
+		observer.Logger.Log(context.Background(), "error", "startup_failed", map[string]any{"reason_code": "agent_socket"})
+		os.Exit(1)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = stopAgentSocket(ctx)
+	}()
 
-	// startup config validation (non-fatal, log warnings)
-	for _, r := range config.ValidateStartup() {
-		if !r.OK {
-			logging.Warn.Printf("[startup] %s/%s: %s", r.Component, r.Check, r.Message)
+	for _, result := range config.ValidateStartup() {
+		if result.OK {
+			observer.Logger.Log(context.Background(), "info", "startup_check", map[string]any{"outcome": "success"})
 		} else {
-			logging.Info.Printf("[startup] %s/%s: %s", r.Component, r.Check, r.Message)
+			observer.Logger.Log(context.Background(), "warn", "startup_check", map[string]any{"outcome": "failure"})
 		}
 	}
 
 	adminUser := strings.TrimSpace(os.Getenv("PGW_ADMIN_USER"))
-	adminPassHash := strings.TrimSpace(os.Getenv("PGW_ADMIN_PASS_HASH"))
-	adminPass := strings.TrimSpace(os.Getenv("PGW_ADMIN_PASS"))
-	// if plain password provided and no hash, derive once at startup
-	if adminPassHash == "" && adminPass != "" {
-		if h, err := auth.HashPassword(adminPass, auth.DefaultParams()); err == nil {
-			adminPassHash = h
-		}
-	}
-
-	checkAdmin := func(u, p string) bool {
-		if u == "" || p == "" || u != adminUser || adminPassHash == "" {
-			return false
-		}
-		ok, _ := auth.VerifyPassword(adminPassHash, p)
-		return ok
-	}
-
-	// choose store
-	var st store.Store
-	switch os.Getenv("PGW_STORE") {
-	case "file":
-		path := os.Getenv("PGW_STORE_PATH")
-		if path == "" {
-			path = "/var/lib/pgw/state.json"
-		}
-		st = store.NewFile(path)
-	default:
-		st = store.NewMemory()
-	}
-
-	// login rate limiter: 5 failed attempts per 15 minutes per IP
 	loginRL := httpx.NewLoginRateLimiter(5, 15*time.Minute)
-
-	// background health
-	interval := config.LoadHealth().Interval
-	go func() {
-		t := time.NewTicker(interval)
-		defer t.Stop()
-		for {
-			runHealthTick(st)
-			<-t.C
-		}
-	}()
-
-	http.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-
-	// ---- Auth ----
-	http.HandleFunc("/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(405)
-			return
-		}
-		// rate limit by remote IP
-		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if !loginRL.Allow(ip) {
-			httpx.JSON(w, 429, map[string]string{"error": "too many login attempts, try again later"})
-			return
-		}
-		// limit request body to 1 MB
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		var req struct{ Username, Password string }
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.JSON(w, 400, map[string]string{"error": "bad json"})
-			return
-		}
-		if adminUser == "" || adminPassHash == "" {
-			httpx.JSON(w, 503, map[string]string{"error": "admin not configured"})
-			return
-		}
-		if !checkAdmin(req.Username, req.Password) {
-			loginRL.RecordFailure(ip)
-			httpx.JSON(w, 401, map[string]string{"error": "invalid credentials"})
-			return
-		}
-		loginRL.Reset(ip)
-		tok, exp, err := auth.SignJWT(adminUser, "admin", cfg.JWTSecret, 12*time.Hour)
-		if err != nil {
-			logging.Error.Println("sign jwt:", err)
-			httpx.JSON(w, 500, map[string]string{"error": "internal"})
-			return
-		}
-		httpx.JSON(w, 200, map[string]any{"token": tok, "role": "admin", "expires_at": exp.UTC().Format(time.RFC3339)})
-	})
-
-	// ---- Proxies ----
-	http.HandleFunc("/v1/proxies", func(w http.ResponseWriter, r *http.Request) {
-		role, ok := authorizeRequest(r, cfg.JWTSecret)
-		if !ok {
-			httpx.JSON(w, 401, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if r.Method != http.MethodGet && !(r.Method == http.MethodPost && role == "agent") && role != "admin" {
-			httpx.JSON(w, 403, map[string]string{"error": "forbidden"})
-			return
-		}
-
-		switch r.Method {
-		case http.MethodGet:
-			// Return proxies in a stable order: host asc, port asc, id asc
-			ps := st.ListProxies()
-			sort.SliceStable(ps, func(i, j int) bool {
-				hi, hj := ps[i].Host, ps[j].Host
-				if hi != hj {
-					return hi < hj
-				}
-				if ps[i].Port != ps[j].Port {
-					return ps[i].Port < ps[j].Port
-				}
-				return ps[i].ID < ps[j].ID
-			})
-			httpx.JSON(w, 200, ps)
-		case http.MethodPost:
-			logging.Info.Printf("[DEBUG] POST /v1/proxies called")
-			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-			var p types.Proxy
-			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-				httpx.JSON(w, 400, map[string]string{"error": "bad json"})
-				return
-			}
-
-
-			// Validate proxy type
-			if err := validateProxyType(p.Type); err != nil {
-				httpx.JSON(w, 400, map[string]string{"error": err.Error()})
-				return
-			}
-			// Check for duplicate proxy
-			existingProxies := st.ListProxies()
-			if isProxyDuplicate(p, existingProxies) {
-				httpx.JSON(w, 409, map[string]string{"error": "proxy already exists with same host, port, username, and password"})
-				return
-			}
-			p = st.CreateProxy(p)
-			httpx.JSON(w, 201, p)
-		default:
-			w.WriteHeader(405)
-		}
-	})
-
-	http.HandleFunc("/v1/proxies/", func(w http.ResponseWriter, r *http.Request) {
-		role, ok := authorizeRequest(r, cfg.JWTSecret)
-		if !ok {
-			httpx.JSON(w, 401, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if r.Method != http.MethodGet && role != "admin" && role != "agent" {
-			httpx.JSON(w, 403, map[string]string{"error": "forbidden"})
-			return
-		}
-
-		path := strings.TrimPrefix(r.URL.Path, "/v1/proxies/")
-		// POST /v1/proxies/{id}/check
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/check") {
-			id := strings.TrimSuffix(path, "/check")
-			var target types.Proxy
-			found := false
-			for _, p := range st.ListProxies() {
-				if p.ID == id {
-					target = p
-					found = true
-					break
-				}
-			}
-			if !found {
-				httpx.JSON(w, 404, map[string]string{"error": "not found"})
-				return
-			}
-			if target.Type != "http" && target.Type != "socks5" {
-				httpx.JSON(w, 400, map[string]string{"error": "only http and socks5 supported"})
-				return
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-			var res check.Result
-			if target.Type == "socks5" {
-				res = check.CheckSOCKS5(ctx, target.Host, target.Port, target.Username, target.Password)
-			} else {
-				res = check.CheckHTTP(ctx, target.Host, target.Port, target.Username, target.Password)
-			}
-			cancel()
-			if res.Err != nil {
-				st.SetProxyTelemetry(target.ID, types.StatusDown, 0, "")
-				httpx.JSON(w, 200, res)
-				return
-			}
-			st.SetProxyTelemetry(target.ID, res.Status, res.LatencyMs, res.ExitIP)
-			httpx.JSON(w, 200, res)
-			return
-		}
-
-		// DELETE /v1/proxies/{id}
-		if r.Method == http.MethodDelete && path != "" && !strings.Contains(path, "/") {
-			id := path
-			// collect ports of mappings referencing this proxy (before delete)
-			ports := map[int]struct{}{}
-			for _, mv := range st.ListMappings() {
-				if mv.Proxy.ID == id && mv.LocalRedirectPort > 0 {
-					ports[mv.LocalRedirectPort] = struct{}{}
-				}
-			}
-			if ok := st.DeleteProxy(id); !ok {
-				httpx.JSON(w, 404, map[string]string{"error": "not found"})
-				return
-			}
-			w.WriteHeader(204)
-
-			// async cleanup per port, then reconcile
-			go func() {
-				for port := range ports {
-					stillUsed := false
-					for _, mv := range st.ListMappings() {
-						if mv.LocalRedirectPort == port {
-							stillUsed = true
-							break
-						}
-					}
-					if !stillUsed {
-						_ = os.Remove(fmt.Sprintf("/var/lib/pgw/ports/%d", port))
-						_ = exec.Command("sudo", "systemctl", "stop", fmt.Sprintf("pgw-fwd@%d", port)).Run()
-					}
-				}
-				_ = reconcileNow()
-			}()
-			return
-		}
-
-		w.WriteHeader(404)
-	})
-
-	// ---- Clients ----
-	http.HandleFunc("/v1/clients", func(w http.ResponseWriter, r *http.Request) {
-		role, ok := authorizeRequest(r, cfg.JWTSecret)
-		if !ok {
-			httpx.JSON(w, 401, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if r.Method != http.MethodGet && role != "admin" {
-			httpx.JSON(w, 403, map[string]string{"error": "forbidden"})
-			return
-		}
-
-		switch r.Method {
-		case http.MethodGet:
-			httpx.JSON(w, 200, st.ListClients())
-
-		case http.MethodPost:
-			logging.Info.Printf("[DEBUG] POST /v1/mappings called")
-			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-			var c types.Client
-			if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-				httpx.JSON(w, 400, map[string]string{"error": "bad json"})
-				return
-			}
-			// enforce /32, normalise IP-only to /32
-			norm, err := normalizeIPv4HostCIDR(c.IPCidr)
-			if err != nil {
-				httpx.JSON(w, 400, map[string]string{"error": err.Error()})
-				return
-			}
-			c.IPCidr = norm
-
-			c = st.CreateClient(c)
-			httpx.JSON(w, 201, c)
-
-		default:
-			w.WriteHeader(405)
-		}
-	})
-
-	// DELETE /v1/clients/{id}  (cascade delete mappings of this client)
-	http.HandleFunc("/v1/clients/", func(w http.ResponseWriter, r *http.Request) {
-		role, ok := authorizeRequest(r, cfg.JWTSecret)
-		if !ok {
-			httpx.JSON(w, 401, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if r.Method != http.MethodGet && role != "admin" {
-			httpx.JSON(w, 403, map[string]string{"error": "forbidden"})
-			return
-		}
-
-		if r.Method != http.MethodDelete {
-			w.WriteHeader(405)
-			return
-		}
-		id := strings.TrimPrefix(r.URL.Path, "/v1/clients/")
-		if id == "" || id == "/v1/clients" {
-			w.WriteHeader(404)
-			return
-		}
-		if ok := st.DeleteClient(id); !ok {
-			httpx.JSON(w, 404, map[string]string{"error": "not found"})
-			return
-		}
-		w.WriteHeader(204)
-	})
-
-	// ---- Mappings ----
-	http.HandleFunc("/v1/mappings", func(w http.ResponseWriter, r *http.Request) {
-		role, ok := authorizeRequest(r, cfg.JWTSecret)
-		if !ok {
-			httpx.JSON(w, 401, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if r.Method != http.MethodGet && role != "admin" {
-			httpx.JSON(w, 403, map[string]string{"error": "forbidden"})
-			return
-		}
-
-		switch r.Method {
-		case http.MethodGet:
-			// compute derived state before returning
-			views := st.ListMappings()
-			for i := range views {
-				// do not override explicit FAILED state
-				if strings.ToUpper(views[i].State) == "FAILED" {
-					continue
-				}
-				if ds := deriveMappingState(views[i]); ds != "" {
-					views[i].State = ds
-				}
-			}
-			// sort by client IPv4 ascending
-			sort.SliceStable(views, func(i, j int) bool {
-				ki := ipv4Key(views[i].Client.IPCidr)
-				kj := ipv4Key(views[j].Client.IPCidr)
-				if ki != kj {
-					return ki < kj
-				}
-				return views[i].ID < views[j].ID
-			})
-			httpx.JSON(w, 200, views)
-		case http.MethodPost:
-			logging.Info.Printf("[DEBUG] POST /v1/mappings called")
-			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-			var m types.Mapping
-			if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-				httpx.JSON(w, 400, map[string]string{"error": "bad json"})
-				return
-			}
-
-			// Enforce unique proxy mapping: one mapping per proxy
-			for _, mv := range st.ListMappings() {
-				if mv.Proxy.ID == m.ProxyID {
-					httpx.JSON(w, 409, map[string]string{"error": "proxy already mapped"})
-					return
-				}
-			}
-			if m.Protocol == "" {
-				m.Protocol = "http"
-			}
-			port, err := choosePortForClient(st, m.ClientID, m.LocalRedirectPort)
-			if err != nil {
-				httpx.JSON(w, 400, map[string]string{"error": err.Error()})
-				return
-			}
-			m.LocalRedirectPort = port
-			mv, ok := st.CreateMapping(m)
-			if !ok {
-				httpx.JSON(w, 400, map[string]string{"error": "invalid client/proxy"})
-				return
-			}
-
-			// Health-check upstream before applying
-			if mv.Proxy.Type != "http" {
-				_ = st.UpdateMappingState(mv.ID, "FAILED", mv.LocalRedirectPort)
-				mv.State = "FAILED"
-				logging.Info.Printf("[DEBUG] Sending JSON response for mapping %s", mv.ID)
-				httpx.JSON(w, 201, mv)
-				return
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-			var res check.Result
-			if mv.Proxy.Type == "socks5" {
-				res = check.CheckSOCKS5(ctx, mv.Proxy.Host, mv.Proxy.Port, mv.Proxy.Username, mv.Proxy.Password)
-			} else {
-				res = check.CheckHTTP(ctx, mv.Proxy.Host, mv.Proxy.Port, mv.Proxy.Username, mv.Proxy.Password)
-			}
-			cancel()
-			if res.Err != nil {
-				st.SetProxyTelemetry(mv.Proxy.ID, types.StatusDown, 0, "")
-				_ = st.UpdateMappingState(mv.ID, "FAILED", mv.LocalRedirectPort)
-				mv.State = "FAILED"
-				logging.Info.Printf("[DEBUG] Sending JSON response for mapping %s", mv.ID)
-				httpx.JSON(w, 201, mv)
-				return
-			}
-			st.SetProxyTelemetry(mv.Proxy.ID, res.Status, res.LatencyMs, res.ExitIP)
-
-			// First-use: ensure flag + start forwarder (best-effort)
-			if mv.LocalRedirectPort > 0 {
-				_ = os.MkdirAll("/var/lib/pgw/ports", 0o755)
-				_ = os.WriteFile(fmt.Sprintf("/var/lib/pgw/ports/%d", mv.LocalRedirectPort), []byte(""), 0o644)
-				// Restart regardless of preUsed to ensure the forwarder switches to the new upstream mapping.
-				_ = exec.Command("sudo", "systemctl", "restart", fmt.Sprintf("pgw-fwd@%d", mv.LocalRedirectPort)).Run()
-			}
-
-			// Apply: reconcile then mark APPLIED
-			go func(mv types.MappingView) {
-				if mv.LocalRedirectPort <= 0 {
-					return
-				}
-				_ = reconcileNow()
-				time.Sleep(200 * time.Millisecond)
-				if ds := deriveMappingState(mv); ds == "APPLIED" {
-					_ = st.UpdateMappingState(mv.ID, "APPLIED", mv.LocalRedirectPort)
-				}
-			}(mv)
-
-			logging.Info.Printf("[DEBUG] Sending JSON response for mapping %s", mv.ID)
-			httpx.JSON(w, 201, mv)
-
-		}
-
-	})
-
-	// GET /v1/mappings/active -> filter by health status based on PGW_ENFORCE_HEALTH
-	http.HandleFunc("/v1/mappings/active", func(w http.ResponseWriter, r *http.Request) {
-		role, ok := authorizeRequest(r, cfg.JWTSecret)
-		if !ok {
-			httpx.JSON(w, 401, map[string]string{"error": "unauthorized"})
-			return
-		}
-		if r.Method != http.MethodGet && role != "admin" {
-			httpx.JSON(w, 403, map[string]string{"error": "forbidden"})
-			return
-		}
-
+	observer.Metrics.SetMigrationStatus("ready", true)
+	if state, stateErr := repository.GetReconcileState(context.Background()); stateErr == nil {
+		observer.Metrics.SetAgentState(state.PendingGeneration, state.AppliedGeneration, state.State)
+	} else {
+		observer.Metrics.ObserveDBError("agent_state_startup")
+	}
+	http.Handle("/metrics", observer.Metrics.Handler())
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			w.WriteHeader(405)
+			w.Header().Set("Allow", "GET")
+			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		views := st.ListMappings()
-		for i := range views {
-			// When PGW_ENFORCE_HEALTH=false (default): include all mappings
-			// When PGW_ENFORCE_HEALTH=true: skip FAILED mappings
-			if EnforceHealth && strings.ToUpper(views[i].State) == "FAILED" {
-				continue
-			}
-			if ds := deriveMappingState(views[i]); ds != "" {
-				views[i].State = ds
-				// sort by client IPv4 ascending
-				sort.SliceStable(views, func(i, j int) bool {
-					ki := ipv4Key(views[i].Client.IPCidr)
-					kj := ipv4Key(views[j].Client.IPCidr)
-					if ki != kj {
-						return ki < kj
-					}
-					return views[i].ID < views[j].ID
-				})
-			}
-		}
-		httpx.JSON(w, 200, views)
+		w.WriteHeader(http.StatusOK)
 	})
-
-	// Update mapping state: POST /v1/mappings/{id}/state
-	http.HandleFunc("/v1/mappings/state/", func(w http.ResponseWriter, r *http.Request) {
-
-		role, ok := authorizeRequest(r, cfg.JWTSecret)
-		if !ok {
-			httpx.JSON(w, 401, map[string]string{"error": "unauthorized"})
+	http.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if r.Method != http.MethodGet && role != "admin" && role != "agent" {
-			httpx.JSON(w, 403, map[string]string{"error": "forbidden"})
+		if _, err := repository.GetReconcileState(r.Context()); err != nil {
+			observer.Metrics.ObserveDBError("readiness")
+			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-
-		if r.Method != http.MethodPost {
-			w.WriteHeader(405)
-			return
-		}
-		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-		if len(parts) != 4 || parts[0] != "v1" || parts[1] != "mappings" || parts[2] != "state" {
-			w.WriteHeader(404)
-			return
-		}
-		id := parts[3]
-		var req struct {
-			State     string `json:"state"`
-			LocalPort int    `json:"local_redirect_port"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.JSON(w, 400, map[string]string{"error": "bad json"})
-			return
-		}
-		if req.State != "PENDING" && req.State != "APPLIED" && req.State != "FAILED" {
-			httpx.JSON(w, 400, map[string]string{"error": "invalid state"})
-			return
-		}
-		if ok := st.UpdateMappingState(id, req.State, req.LocalPort); !ok {
-			httpx.JSON(w, 404, map[string]string{"error": "not found"})
-			return
-		}
-		w.WriteHeader(204)
+		w.WriteHeader(http.StatusOK)
 	})
-
-	// DELETE /v1/mappings/{id} (hard delete + cleanup)
-	http.HandleFunc("/v1/mappings/", func(w http.ResponseWriter, r *http.Request) {
-		role, ok := authorizeRequest(r, cfg.JWTSecret)
-		if !ok {
-			httpx.JSON(w, 401, map[string]string{"error": "unauthorized"})
+	http.HandleFunc("/v1/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if r.Method != http.MethodGet && role != "admin" {
-			httpx.JSON(w, 403, map[string]string{"error": "forbidden"})
-			return
-		}
-
-		// Skip exact /v1/mappings to avoid conflict with main handler
-		if r.URL.Path == "/v1/mappings" {
-			return
-		}
-		if r.Method != http.MethodDelete {
-			w.WriteHeader(405)
-			return
-		}
-		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-		if len(parts) != 3 || parts[0] != "v1" || parts[1] != "mappings" {
-			w.WriteHeader(404)
-			return
-		}
-		id := parts[2]
-		if id == "" {
-			w.WriteHeader(400)
-			return
-		}
-
-		// capture port before delete
-		port := 0
-		for _, mv := range st.ListMappings() {
-			if mv.ID == id {
-				port = mv.LocalRedirectPort
-				break
-			}
-		}
-
-		if ok := st.DeleteMapping(id); !ok {
-			httpx.JSON(w, 404, map[string]string{"error": "not found"})
-			return
-		}
-		w.WriteHeader(204)
-
-		if port > 0 {
-			go func(port int) {
-				// if no remaining mapping uses this port, cleanup flag and stop forwarder
-				stillUsed := false
-				for _, mv := range st.ListMappings() {
-					if mv.LocalRedirectPort == port {
-						stillUsed = true
-						break
-					}
-				}
-				if !stillUsed {
-					_ = os.Remove(fmt.Sprintf("/var/lib/pgw/ports/%d", port))
-					_ = exec.Command("sudo", "systemctl", "stop", fmt.Sprintf("pgw-fwd@%d", port)).Run()
-				}
-				_ = reconcileNow()
-			}(port)
-		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
 	})
+	http.HandleFunc("/v1/auth/login", newLoginHandlerWithProxyIdentity(adminUser, cfg.AdminPassHash, cfg.JWTSecret, loginRL, uiProxyVerifier))
 
-	server := &http.Server{Addr: cfg.Addr}
-
-	// graceful shutdown on SIGTERM/SIGINT
+	server := boundedHTTPServer(cfg.Addr, observer.WrapHTTP(combinedAPIHandler(v2)))
 	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-		sig := <-sigCh
-		logging.Info.Printf("received %s, shutting down...", sig)
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+		defer signal.Stop(signals)
+		<-signals
+		observer.Logger.Log(context.Background(), "info", "shutdown_requested", map[string]any{"reason_code": "signal"})
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {
-			logging.Error.Printf("shutdown error: %v", err)
+			observer.Logger.Log(context.Background(), "error", "shutdown_failed", map[string]any{"reason_code": "server"})
 		}
 	}()
-
-	logging.Info.Printf("pgw-api listening on %s\n", cfg.Addr)
+	observer.Logger.Log(context.Background(), "info", "server_start", map[string]any{"reason_code": "loopback"})
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logging.Error.Println(err)
+		observer.Logger.Log(context.Background(), "error", "server_failed", map[string]any{"reason_code": "listener"})
 		os.Exit(1)
 	}
 }
 
-// reconcileNow tells local agent to apply nft rules. Best-effort.
-func reconcileNow() error {
-	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:9090/agent/reconcile", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("agent %s", resp.Status)
-	}
-	return nil
+const maxLoginBodyBytes = 1 << 20
+const maxAdminPasswordBytes = 4096
+
+func newLoginHandler(adminUser string, adminPassHash, jwtSecret []byte, loginRL *httpx.LoginRateLimiter) http.HandlerFunc {
+	return newLoginHandlerWithProxyIdentity(adminUser, adminPassHash, jwtSecret, loginRL, nil)
 }
 
-func runHealthTick(st store.Store) {
-	proxies := st.ListProxies()
-	type result struct {
-		id      string
-		status  types.ProxyStatus
-		latency int
-		exitIP  string
-	}
-	results := make(chan result, len(proxies))
-
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 10) // max 10 concurrent checks
-	for _, p := range proxies {
-		if p.Type != "http" && p.Type != "socks5" {
-			continue
+func newLoginHandlerWithProxyIdentity(adminUser string, adminPassHash, jwtSecret []byte, loginRL *httpx.LoginRateLimiter, proxyVerifier *httpx.ProxyIdentityVerifier) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
 		}
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(p types.Proxy) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-			var res check.Result
-			if p.Type == "socks5" {
-				res = check.CheckSOCKS5(ctx, p.Host, p.Port, p.Username, p.Password)
-			} else {
-				res = check.CheckHTTP(ctx, p.Host, p.Port, p.Username, p.Password)
+		ip, err := httpx.CanonicalLoginClientIP(r, proxyVerifier)
+		if err != nil {
+			observeAuth(r, "failure", "invalid_proxy_identity")
+			httpx.JSON(w, http.StatusBadRequest, map[string]string{"error": "invalid proxy identity"})
+			return
+		}
+		reservationRelease, admitted, limited := loginRL.Reserve(ip)
+		if !admitted {
+			if !limited {
+				observeAuth(r, "failure", "verification_inflight")
+				httpx.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "login verification temporarily unavailable"})
+				return
 			}
-			cancel()
-			if res.Err != nil {
-				results <- result{id: p.ID, status: types.StatusDown}
-			} else {
-				results <- result{id: p.ID, status: res.Status, latency: res.LatencyMs, exitIP: res.ExitIP}
+			observeAuth(r, "rate_limited", "rate_limited")
+			httpx.JSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many login attempts, try again later"})
+			return
+		}
+		defer reservationRelease()
+		r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
+		defer r.Body.Close()
+		body, err := io.ReadAll(r.Body)
+		defer secret.Wipe(body)
+		if err != nil {
+			httpx.JSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
+			return
+		}
+		username, password, err := decodeLoginRequest(body)
+		if err != nil {
+			httpx.JSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
+			return
+		}
+		defer secret.Wipe(password)
+		if adminUser == "" || len(adminPassHash) == 0 {
+			httpx.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "admin not configured"})
+			return
+		}
+		verified, verifyErr := auth.VerifyPasswordBytes(adminPassHash, password)
+		if errors.Is(verifyErr, auth.ErrPasswordWorkBusy) {
+			observeAuth(r, "failure", "verification_overloaded")
+			httpx.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "login verification temporarily unavailable"})
+			return
+		}
+		if username != adminUser || !verified {
+			observeAuth(r, "failure", "invalid_credentials")
+			loginRL.RecordFailure(ip)
+			httpx.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+			return
+		}
+		loginRL.Reset(ip)
+		observeAuth(r, "success", "authenticated")
+		token, expiresAt, err := auth.SignJWT(adminUser, "admin", jwtSecret, auth.MaxJWTTTL)
+		if err != nil {
+			if observer := observability.FromContext(r.Context()); observer != nil {
+				observer.Logger.Log(r.Context(), "error", "auth_outcome", map[string]any{"outcome": "failure", "reason_code": "signing_failed"})
 			}
-		}(p)
-	}
-	// close channel after all goroutines finish
-	go func() { wg.Wait(); close(results) }()
-
-	// collect all results, then batch-update once
-	var updates []store.TelemetryUpdate
-	for r := range results {
-		updates = append(updates, store.TelemetryUpdate{
-			ID:      r.id,
-			Status:  r.status,
-			Latency: r.latency,
-			ExitIP:  r.exitIP,
+			httpx.JSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+			return
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     "pgw_jwt",
+			Value:    token,
+			Path:     "/",
+			Expires:  expiresAt.UTC(),
+			MaxAge:   int(auth.MaxJWTTTL.Seconds()),
+			Secure:   true,
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
 		})
-	}
-	if len(updates) > 0 {
-		st.SetProxyTelemetryBatch(updates)
+		token = ""
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-// deriveMappingState inspects system state to infer mapping status.
-// Returns "APPLIED" or "" (keep stored state).
-func deriveMappingState(mv types.MappingView) string {
-	if mv.LocalRedirectPort <= 0 {
-		return ""
+// decodeLoginRequest keeps the password in mutable bytes end-to-end. The
+// decoder is used only for object framing; the password JSON token is decoded
+// by secret.DecodeJSONStringBytes rather than into an immutable Go string.
+func decodeLoginRequest(body []byte) (string, []byte, error) {
+	fields, err := secret.StrictJSONObject(body, []string{"username", "password"})
+	if err != nil {
+		return "", nil, fmt.Errorf("login request must be an object")
 	}
-	portOK := false
-	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", mv.LocalRedirectPort), 200*time.Millisecond)
-	if err == nil {
-		portOK = true
-		_ = c.Close()
+	var username string
+	usernameRaw, usernameOK := fields["username"]
+	passwordRaw, passwordOK := fields["password"]
+	if !usernameOK || !passwordOK {
+		return "", nil, fmt.Errorf("invalid login request")
 	}
-	// nft rule check: best effort
-	nftOK := false
-	if out, err := exec.Command("nft", "list", "table", "ip", "pgw").Output(); err == nil {
-		ip := mv.Client.IPCidr
-		if i := strings.Index(ip, "/"); i >= 0 {
-			ip = ip[:i]
+	if err := json.Unmarshal(usernameRaw, &username); err != nil {
+		return "", nil, err
+	}
+	password, err := secret.DecodeJSONStringBytes(passwordRaw)
+	transferred := false
+	defer func() {
+		if !transferred {
+			secret.Wipe(password)
 		}
-		to := fmt.Sprintf("redirect to :%d", mv.LocalRedirectPort)
-		for _, line := range strings.Split(string(out), "\n") {
-			if strings.Contains(line, "ip saddr "+ip) && strings.Contains(line, to) {
-				nftOK = true
-				break
-			}
-		}
+	}()
+	if err != nil {
+		return "", nil, err
 	}
-	if portOK && nftOK {
-		return "APPLIED"
+	if strings.TrimSpace(username) == "" || len(username) > 256 || len(password) == 0 || len(password) > maxAdminPasswordBytes {
+		return "", nil, fmt.Errorf("invalid login request")
 	}
-	return ""
+	transferred = true
+	return username, password, nil
 }
 
-// choosePortForClient ensures one-port-per-proxy:
-// choosePortForClient ensures one-port-per-client:
-// - If requested>0: allow only if unused or already bound to this client.
-// - If requested==0: reuse existing port of this client if any; otherwise allocate a free port in [base..max].
-func choosePortForClient(st store.Store, clientID string, requested int) (int, error) {
-	// map of port -> clientID (first seen)
-	used := map[int]string{}
-	existing := 0
-	for _, mv := range st.ListMappings() {
-		if mv.LocalRedirectPort <= 0 {
-			continue
-		}
-		if _, ok := used[mv.LocalRedirectPort]; !ok {
-			used[mv.LocalRedirectPort] = mv.Client.ID
-		}
-		if mv.Client.ID == clientID && existing == 0 {
-			existing = mv.LocalRedirectPort
-		}
+func observeAuth(r *http.Request, outcome, reason string) {
+	if observer := observability.FromContext(r.Context()); observer != nil {
+		observer.Metrics.ObserveAuth(outcome, reason)
+		observer.Logger.Log(r.Context(), "info", "auth_outcome", map[string]any{"outcome": outcome, "reason_code": reason})
 	}
-	if requested > 0 {
-		if cid, ok := used[requested]; ok && cid != clientID {
-			return 0, fmt.Errorf("port %d is already used by another client", requested)
-		}
-		return requested, nil
-	}
-	if existing > 0 {
-		return existing, nil
-	}
-	base := 15001
-	max := 15999
-	if v := os.Getenv("PGW_FWD_BASE_PORT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			base = n
-		}
-	}
-	if v := os.Getenv("PGW_FWD_MAX_PORT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > base {
-			max = n
-		}
-	}
-	for p := base; p <= max; p++ {
-		if _, ok := used[p]; !ok {
-			return p, nil
-		}
-	}
-	return 0, fmt.Errorf("no free port available in range %d-%d", base, max)
 }
 
-// ipv4Key converts CIDR or IPv4 string to a sortable uint32 key (invalid → MaxUint32)
-func ipv4Key(cidr string) uint32 {
-	ip := cidr
-	if i := strings.Index(ip, "/"); i >= 0 {
-		ip = ip[:i]
+// runAdminPasswordHashCommand implements the installer-only helper command.
+// The password is read from bounded stdin, never an environment variable or
+// argument. The only stdout output is the resulting Argon2id PHC value.
+func runAdminPasswordHashCommand(args []string, input io.Reader, output io.Writer) (bool, error) {
+	if len(args) == 0 {
+		return false, nil
 	}
-	p := net.ParseIP(ip)
-	if p == nil {
-		return ^uint32(0)
+	if args[0] != "hash-admin-password" {
+		return false, nil
 	}
-	v4 := p.To4()
-	if v4 == nil {
-		return ^uint32(0)
+	var password []byte
+	var err error
+	switch {
+	case len(args) == 1:
+		password, err = io.ReadAll(io.LimitReader(input, maxAdminPasswordBytes+1))
+	case len(args) == 3 && args[1] == "--file":
+		password, err = secret.LoadRootOwnedAdminPasswordFile(args[2], maxAdminPasswordBytes)
+	default:
+		return true, fmt.Errorf("usage: pgw-api hash-admin-password [--file <absolute-path>]")
 	}
-	return uint32(v4[0])<<24 | uint32(v4[1])<<16 | uint32(v4[2])<<8 | uint32(v4[3])
-}
-
-// authorizeRequest extracts JWT from Authorization Bearer or pgw_jwt cookie, verifies and returns role.
-func authorizeRequest(r *http.Request, secret string) (string, bool) {
-	h := strings.TrimSpace(r.Header.Get("Authorization"))
-	var tok string
-	if len(h) >= 7 && strings.ToLower(h[:7]) == "bearer " {
-		tok = strings.TrimSpace(h[7:])
+	defer zeroBytes(password)
+	if err != nil {
+		return true, fmt.Errorf("read password: %w", err)
 	}
-	if tok == "" {
-		if c, err := r.Cookie("pgw_jwt"); err == nil {
-			tok = c.Value
+	if len(password) > maxAdminPasswordBytes {
+		return true, fmt.Errorf("password exceeds %d bytes", maxAdminPasswordBytes)
+	}
+	if len(password) > 0 && password[len(password)-1] == '\n' {
+		password = password[:len(password)-1]
+		if len(password) > 0 && password[len(password)-1] == '\r' {
+			password = password[:len(password)-1]
 		}
 	}
-	if tok == "" {
+	if len(password) == 0 {
+		return true, fmt.Errorf("password is empty")
+	}
+	for _, value := range password {
+		if value == 0 {
+			return true, fmt.Errorf("password contains NUL")
+		}
+	}
+	hash, err := auth.HashPasswordBytes(password, auth.DefaultParams())
+	if err != nil {
+		return true, fmt.Errorf("hash password: %w", err)
+	}
+	if err := auth.ValidatePasswordHash(hash); err != nil {
+		return true, fmt.Errorf("validate generated password hash: %w", err)
+	}
+	if _, err := io.WriteString(output, hash+"\n"); err != nil {
+		return true, fmt.Errorf("write password hash: %w", err)
+	}
+	return true, nil
+}
+
+const (
+	apiReadHeaderTimeout = 5 * time.Second
+	apiReadTimeout       = 15 * time.Second
+	apiWriteTimeout      = 30 * time.Second
+	apiIdleTimeout       = 60 * time.Second
+	apiMaxHeaderBytes    = 16 << 10
+)
+
+func boundedHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: apiReadHeaderTimeout,
+		ReadTimeout:       apiReadTimeout,
+		WriteTimeout:      apiWriteTimeout,
+		IdleTimeout:       apiIdleTimeout,
+		MaxHeaderBytes:    apiMaxHeaderBytes,
+	}
+}
+
+// authorizeRequest is intentionally limited to the admin JWT/cookie. The
+// Agent service token is accepted only by internal/api on the Unix socket.
+func authorizeRequest(r *http.Request, secret []byte) (string, bool) {
+	token := bearerOrCookie(r)
+	if token == "" {
 		return "", false
 	}
-	if at := os.Getenv("PGW_AGENT_TOKEN"); at != "" && tok == at {
-		return "agent", true
-	}
-	cl, err := auth.ParseJWT(tok, secret)
+	claims, err := auth.ParseJWT(token, secret)
 	if err != nil {
 		return "", false
 	}
-	return cl.Role, true
-}
-
-// Helper function to check if proxy is duplicate based on Host, Port, Username, Password
-func isProxyDuplicate(new types.Proxy, existing []types.Proxy) bool {
-	for _, p := range existing {
-		if p.Host == new.Host && p.Port == new.Port {
-			// Compare username - handle nil pointers
-			newUser := ""
-			existingUser := ""
-			if new.Username != nil {
-				newUser = *new.Username
-			}
-			if p.Username != nil {
-				existingUser = *p.Username
-			}
-			
-			// Compare password - handle nil pointers  
-			newPass := ""
-			existingPass := ""
-			if new.Password != nil {
-				newPass = *new.Password
-			}
-			if p.Password != nil {
-				existingPass = *p.Password
-			}
-			
-			// If host, port, username, and password all match, it's a duplicate
-			if newUser == existingUser && newPass == existingPass {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// validateProxyType validates proxy type field
-func validateProxyType(proxyType string) error {
-	switch proxyType {
-	case "http", "socks5":
-		return nil
-	case "":
-		return fmt.Errorf("proxy type is required")
-	default:
-		return fmt.Errorf("unsupported proxy type: %s (supported: http, socks5)", proxyType)
-	}
+	return claims.Role, true
 }

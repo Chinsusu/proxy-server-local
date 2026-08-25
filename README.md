@@ -1,162 +1,61 @@
-# PGW — Proxy Gateway
+# PGW v2
 
-PGW ép toàn bộ HTTP/HTTPS (TCP 80/443) từ các **client trong LAN** đi qua **forwarder (:15001)**, forwarder sẽ dùng **upstream HTTP proxy** (có thể có user/pass) để đổi **exit IP**.  
-Kiến trúc gồm 4 thành phần:
+PGW là gateway egress fail-close cho LAN. Bảng nftables tĩnh `inet pgw_base`
+chặn trực tiếp `LAN → WAN`; Agent chỉ xuất bản bảng động sau khi Forwarder đã
+báo `READY=1`. Không có direct fallback khi API, Agent, Forwarder hoặc upstream
+proxy lỗi.
 
-- **API** (`pgw-api`, :8080): quản lý `proxies / clients / mappings`, health-check, telemetry.
-- **Agent** (`pgw-agent`, :9090/agent): sinh & apply rules **nftables** từ `mappings`.
-- **Forwarder** (`pgw-fwd`, :15001): transparent CONNECT (+ ghi log SNI đã ẩn nhạy cảm).
-- **UI** (`pgw-ui`, :8081): dashboard & reverse proxy (`/api/*`→API, `/agent/*`→Agent).
+## Kiến trúc vận hành
 
-> Ràng buộc hiện tại: **mỗi client là 1 IP /32** (không nhận CIDR rộng hơn).
+- SQLite `/var/lib/pgw/pgw.db` là production store. JSON chỉ là định dạng
+  import/export ngoại tuyến.
+- `pgw-api` quản lý domain, SQLite và secret mã hóa; không gọi nftables hay
+  systemd.
+- `pgw-agent` là tiến trình duy nhất quản lý bảng nftables động và các instance
+  `pgw-fwd@<port>.service`.
+- `pgw-fwd` chạy theo từng mapping; credential đi qua systemd credentials, không
+  nằm trong argument, environment, config hoặc log.
+- `pgw-ui` phục vụ HTTPS và proxy API bằng token nội bộ riêng.
 
----
+Các service chạy bằng user tách biệt. Chỉ Agent có `CAP_NET_ADMIN`; quyền quản
+lý Forwarder của Agent bị giới hạn bằng polkit theo unit và port.
 
-## Nhanh gọn để chạy thử
-
-Yêu cầu: Go ≥ 1.22, Linux có `nft` (nftables), systemd.
-
-```bash
-# Build từng thành phần
-go build -o bin/pgw-api   ./cmd/api
-go build -o bin/pgw-agent ./cmd/agent
-go build -o bin/pgw-fwd   ./cmd/fwd
-go build -o bin/pgw-ui    ./cmd/ui
-
-sudo install -m 0755 bin/pgw-* /usr/local/bin/
-
-# Chạy dịch vụ (xem ví dụ systemd ở docs/deploy.md)
-sudo systemctl restart pgw-api pgw-agent pgw-fwd pgw-ui
-```
-
-Mặc định địa chỉ:
-
-* API: `http://127.0.0.1:8080`
-* Agent: `http://127.0.0.1:9090/agent`
-* UI: `http://127.0.0.1:8081` (proxy `/api/*` và `/agent/*`)
-* Forwarder: `:15001`
-
----
-
-## Cấu hình (env)
-
-* **API**
-
-  * `PGW_API_ADDR` (mặc định `:8080`)
-  * `PGW_STORE` = `memory` (mặc định) hoặc `file`
-  * `PGW_STORE_PATH` (khi `file`, ví dụ `/var/lib/pgw/state.json`)
-  * `PGW_HEALTH_INTERVAL` (ví dụ `30s`)
-* **Agent**
-
-  * `PGW_AGENT_ADDR` (mặc định `:9090`)
-  * `PGW_API_BASE` (mặc định `http://127.0.0.1:8080`)
-  * `PGW_WAN_IFACE` (ví dụ `eth0`)
-  * `PGW_LAN_IFACE` (ví dụ `ens19`)
-* **Forwarder**
-
-  * `PGW_FWD_ADDR` (mặc định `:15001`)
-* **UI**
-
-  * `PGW_UI_ADDR` (mặc định `:8081`)
-  * `PGW_UI_API` (mặc định `http://127.0.0.1:8080`)
-  * `PGW_UI_AGENT` (mặc định `http://127.0.0.1:9090/agent`)
-
----
-
-## Luồng hoạt động
-
-1. Tạo **proxy** (upstream) qua API/UI → health-check để có `status/latency/exit_ip`.
-2. Tạo **client** (IP **/32**).
-3. Tạo **mapping** client ↔ proxy.
-4. Agent `/agent/reconcile` sinh rules `nft`:
-
-   * NAT redirect TCP 80/443 từ IP client → `:15001`.
-   * Chặn leak ra WAN (`oifname "eth0" drop`), chặn UDP từ client, mở DNS 53 về gateway, mở input port 15001.
-5. Forwarder tiếp nhận kết nối, thực hiện CONNECT tới upstream, log (ẩn nhạy cảm).
-
----
-
-## API nhanh (cURL)
+## Build và kiểm tra
 
 ```bash
-API=http://127.0.0.1:8080
-
-# Proxy (type: "http" hoặc "socks5")
-curl -s -H 'Content-Type: application/json' -d '{
-  "type":"http","host":"ipv4-vt-01.resvn.net","port":24639,
-  "username":"USER","password":"PASS","enabled":true
-}' $API/v1/proxies | jq .
-
-PID=$(curl -s $API/v1/proxies | jq -r '.[0].id')
-curl -s -X POST $API/v1/proxies/$PID/check | jq .
-
-# Client (chỉ /32, nếu thiếu "/32" thì API tự gắn "/32")
-curl -s -H 'Content-Type: application/json' \
-  -d '{"ip_cidr":"192.168.2.3/32","enabled":true}' \
-  $API/v1/clients | jq .
-
-# Mapping
-CID=$(curl -s $API/v1/clients | jq -r '.[0].id')
-curl -s -H 'Content-Type: application/json' \
-  -d '{"client_id":"'"$CID"'","proxy_id":"'"$PID"'"}' \
-  $API/v1/mappings | jq .
-
-# Xem
-curl -s $API/v1/mappings/active | jq .
+go test ./...
+go vet ./...
+CGO_ENABLED=0 go build ./cmd/api ./cmd/agent ./cmd/fwd ./cmd/ui ./cmd/health
+bash deploy/tests/hardening_test.sh
 ```
 
-Danh sách endpoint chi tiết: xem `docs/api.md`.
+Không build hoặc triển khai `cmd/webhook`; auto-update qua webhook không được
+hỗ trợ.
 
----
+## Cài đặt và cập nhật
 
-## Ghi chú bảo mật
+Production chỉ dùng release đã được pin ngoài checkout. Checkout không bao giờ
+được build hoặc thực thi với quyền root:
 
-* Agent cần quyền apply `nft` → chạy dưới user có quyền hoặc cấp quyền `sudo nft -f -` an toàn.
-* UI reverse-proxy chỉ nên bind `127.0.0.1` hoặc đặt sau reverse-proxy bên ngoài.
-* Log SNI/domain đã **ẩn bớt** thông tin nhạy cảm.
-* Chặn leak ngoài WAN & UDP tại `pgw_filter`.
+```bash
+sudo /usr/local/sbin/pgw-release-launcher --dry-run
+sudo /usr/local/sbin/pgw-release-launcher
+```
 
----
+Installer khóa toàn bộ lifecycle, dừng/drain service và Forwarder trước khi
+snapshot DB/runtime, publish file nguyên tử, smoke test, rồi giữ snapshot tại
+`/var/backups/pgw/install.*`. Snapshot được HMAC bằng key root-only và có journal
+khôi phục bền vững. Credential site-specific chỉ được import từ inbox cố định
+`/etc/pgw/credential-inbox`; không truyền đường dẫn qua environment. Không chép
+binary hoặc DB thủ công. Xem
+[`docs/deploy.md`](docs/deploy.md) và [`docs/QUICK_OPS.md`](docs/QUICK_OPS.md).
 
-## Giới hạn hiện tại
+## Tài liệu kỹ thuật
 
-* **Chỉ hỗ trợ client IP /32** (theo Phương án A).
-* Upstream proxy hỗ trợ loại `http` và `socks5`.
-* `memory store` mất dữ liệu khi restart (dùng `file` để lưu bền).
+- [Kiến trúc](docs/architecture.md)
+- [API](docs/api.md)
+- [Coding standard](docs/CODING_STANDARDS.md)
+- [Git workflow và review gate](docs/GIT_WORKFLOW.md)
+- [CI](docs/CI.md)
 
----
-
-## Tài liệu chi tiết
-
-* `docs/architecture.md` – Kiến trúc & rule nftables sinh ra.
-* `docs/deploy.md` – Cài đặt, systemd units, biến môi trường.
-* `docs/api.md` – Tài liệu API.
-* `docs/ui.md` – Giao diện & reverse proxy.
-* `docs/troubleshooting.md` – Lỗi thường gặp & cách xử lý.
-* `docs/security.md` – Khuyến nghị bảo mật.
-
----
-
-## License
-
-AGPL-3.0
-
-
----
-
-## Authentication (JWT)
-
-API và UI được bảo vệ bởi JWT.
-
-- Biến môi trường:
-  - `PGW_JWT_SECRET`: khoá ký JWT (bắt buộc).
-  - `PGW_ADMIN_USER` + `PGW_ADMIN_PASS_HASH` (Argon2id PHC) hoặc `PGW_ADMIN_PASS` (không khuyến nghị).
-  - (Tuỳ chọn) `PGW_AGENT_TOKEN`: token nội bộ cho Agent gọi API (được coi là role `agent`).
-- Đăng nhập:
-  - API: `POST /v1/auth/login` với `{username,password}` → trả `{"token":"<JWT>","role":"admin"}`.
-  - UI: `/login` (form), cookie `pgw_jwt` sẽ được set; UI sẽ forward Authorization tới API.
-- Sử dụng API:
-  - Thêm header `Authorization: Bearer <JWT>` cho mọi endpoint (trừ `/v1/health`, `/v1/auth/login`).
-  - Agent có thể POST `/v1/mappings/state` bằng `Authorization: Bearer ${PGW_AGENT_TOKEN}`.
-
-See docs/QUICK_OPS.md for a quick operations checklist.
+License: AGPL-3.0.

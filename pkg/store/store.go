@@ -80,34 +80,48 @@ func NewMemory() Store {
 // ---------- Proxies ----------
 
 func (s *memoryStore) ListProxies() []types.Proxy {
-	s.mu.RLock(); defer s.mu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := make([]types.Proxy, 0, len(s.proxies))
-	for _, v := range s.proxies { out = append(out, v) }
+	for _, v := range s.proxies {
+		out = append(out, v)
+	}
 	return out
 }
 
 func (s *memoryStore) CreateProxy(p types.Proxy) types.Proxy {
-	s.mu.Lock(); defer s.mu.Unlock()
-	if p.ID == "" { p.ID = uuid.New().String() }
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p.ID == "" {
+		p.ID = uuid.New().String()
+	}
 	p.Status = types.StatusDown
 	s.proxies[p.ID] = p
 	return p
 }
 
 func (s *memoryStore) UpdateProxy(p types.Proxy) (types.Proxy, bool) {
-	s.mu.Lock(); defer s.mu.Unlock()
-	if _, ok := s.proxies[p.ID]; !ok { return types.Proxy{}, false }
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.proxies[p.ID]; !ok {
+		return types.Proxy{}, false
+	}
 	s.proxies[p.ID] = p
 	return p, true
 }
 
 func (s *memoryStore) DeleteProxy(id string) bool {
-	s.mu.Lock(); defer s.mu.Unlock()
-	if _, ok := s.proxies[id]; !ok { return false }
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.proxies[id]; !ok {
+		return false
+	}
 	delete(s.proxies, id)
 	// tuỳ chọn: xoá các mapping tham chiếu tới proxy này
 	for mid, m := range s.mappings {
-		if m.ProxyID == id { delete(s.mappings, mid) }
+		if m.ProxyID == id {
+			delete(s.mappings, mid)
+		}
 	}
 	return true
 }
@@ -115,26 +129,37 @@ func (s *memoryStore) DeleteProxy(id string) bool {
 // ---------- Clients ----------
 
 func (s *memoryStore) ListClients() []types.Client {
-	s.mu.RLock(); defer s.mu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := make([]types.Client, 0, len(s.clients))
-	for _, v := range s.clients { out = append(out, v) }
+	for _, v := range s.clients {
+		out = append(out, v)
+	}
 	return out
 }
 
 func (s *memoryStore) CreateClient(c types.Client) types.Client {
-	s.mu.Lock(); defer s.mu.Unlock()
-	if c.ID == "" { c.ID = uuid.New().String() }
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c.ID == "" {
+		c.ID = uuid.New().String()
+	}
 	s.clients[c.ID] = c
 	return c
 }
 
 func (s *memoryStore) DeleteClient(id string) bool {
-	s.mu.Lock(); defer s.mu.Unlock()
-	if _, ok := s.clients[id]; !ok { return false }
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.clients[id]; !ok {
+		return false
+	}
 	delete(s.clients, id)
 	// cascade: xoá mapping của client này
 	for mid, m := range s.mappings {
-		if m.ClientID == id { delete(s.mappings, mid) }
+		if m.ClientID == id {
+			delete(s.mappings, mid)
+		}
 	}
 	return true
 }
@@ -142,7 +167,8 @@ func (s *memoryStore) DeleteClient(id string) bool {
 // ---------- Mappings ----------
 
 func (s *memoryStore) ListMappings() []types.MappingView {
-	s.mu.RLock(); defer s.mu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	type rec struct {
 		mv  types.MappingView
 		ts  time.Time
@@ -152,7 +178,9 @@ func (s *memoryStore) ListMappings() []types.MappingView {
 	for _, m := range s.mappings {
 		cv, okc := s.clients[m.ClientID]
 		pv, okp := s.proxies[m.ProxyID]
-		if !okc || !okp { continue }
+		if !okc || !okp {
+			continue
+		}
 		r := rec{
 			mv: types.MappingView{
 				ID:                m.ID,
@@ -178,15 +206,24 @@ func (s *memoryStore) ListMappings() []types.MappingView {
 		return tmp[i].mv.ID < tmp[j].mv.ID
 	})
 	out := make([]types.MappingView, len(tmp))
-	for i := range tmp { out[i] = tmp[i].mv }
+	for i := range tmp {
+		out[i] = tmp[i].mv
+	}
 	return out
 }
 
 func (s *memoryStore) CreateMapping(m types.Mapping) (types.MappingView, bool) {
-	s.mu.Lock(); defer s.mu.Unlock()
-	if m.ID == "" { m.ID = uuid.New().String() }
-	if _, ok := s.clients[m.ClientID]; !ok { return types.MappingView{}, false }
-	if _, ok := s.proxies[m.ProxyID]; !ok { return types.MappingView{}, false }
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m.ID == "" {
+		m.ID = uuid.New().String()
+	}
+	if _, ok := s.clients[m.ClientID]; !ok {
+		return types.MappingView{}, false
+	}
+	if _, ok := s.proxies[m.ProxyID]; !ok {
+		return types.MappingView{}, false
+	}
 	m.State = "PENDING"
 	s.mappings[m.ID] = m
 
@@ -202,17 +239,23 @@ func (s *memoryStore) CreateMapping(m types.Mapping) (types.MappingView, bool) {
 }
 
 func (s *memoryStore) DeleteMapping(id string) bool {
-	s.mu.Lock(); defer s.mu.Unlock()
-	if _, ok := s.mappings[id]; !ok { return false }
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.mappings[id]; !ok {
+		return false
+	}
 	delete(s.mappings, id)
 	return true
 }
 
 // UpdateMappingState implements state update for a mapping in memory store.
 func (s *memoryStore) UpdateMappingState(id string, state string, localPort int) bool {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	m, ok := s.mappings[id]
-	if !ok { return false }
+	if !ok {
+		return false
+	}
 	if state != "" {
 		m.State = state
 		if state == "APPLIED" || state == "FAILED" {
@@ -220,7 +263,9 @@ func (s *memoryStore) UpdateMappingState(id string, state string, localPort int)
 			m.LastAppliedAt = &now
 		}
 	}
-	if localPort > 0 { m.LocalRedirectPort = localPort }
+	if localPort > 0 {
+		m.LocalRedirectPort = localPort
+	}
 	s.mappings[id] = m
 	return true
 }
@@ -228,23 +273,36 @@ func (s *memoryStore) UpdateMappingState(id string, state string, localPort int)
 // ---------- Telemetry ----------
 
 func (s *memoryStore) SetProxyTelemetry(id string, status types.ProxyStatus, latency int, exitIP string) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.applyTelemetry(id, status, latency, exitIP)
 }
 
 func (s *memoryStore) SetProxyTelemetryBatch(updates []TelemetryUpdate) {
-	s.mu.Lock(); defer s.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, u := range updates {
 		s.applyTelemetry(u.ID, u.Status, u.Latency, u.ExitIP)
 	}
 }
 
 func (s *memoryStore) applyTelemetry(id string, status types.ProxyStatus, latency int, exitIP string) {
-	p, ok := s.proxies[id]; if !ok { return }
+	p, ok := s.proxies[id]
+	if !ok {
+		return
+	}
 	now := time.Now()
 	p.Status = status
-	if latency > 0 { p.LatencyMs = &latency } else { p.LatencyMs = nil }
-	if exitIP != "" { p.ExitIP = &exitIP } else { p.ExitIP = nil }
+	if latency > 0 {
+		p.LatencyMs = &latency
+	} else {
+		p.LatencyMs = nil
+	}
+	if exitIP != "" {
+		p.ExitIP = &exitIP
+	} else {
+		p.ExitIP = nil
+	}
 	p.LastCheckedAt = &now
 	s.proxies[id] = p
 }
