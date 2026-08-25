@@ -884,10 +884,14 @@ remove_legacy_sealed_stage_for_snapshot() {
 }
 
 atomic_restore_path() {
-    local state="$1" source="$2" target="$3" logical="$4" expected_uid=0
+    local state="$1" source="$2" target="$3" metadata="$4" logical="$5" expected_uid=0
+    [[ -n "${snapshot_restore_stage}" &&
+       "${snapshot_restore_stage}" == "$(host_path /run/pgw)/snapshot-restore.install."* &&
+       "${metadata}" == "${snapshot_restore_stage}/metadata.json" &&
+       -f "${metadata}" && ! -L "${metadata}" ]] || return 1
     ((installer_sourced)) && expected_uid="${EUID}"
     "${PYTHON3}" -I "$(release_file deploy/restore_snapshot.py)" \
-        "${state}" "${source}" "${target}" "${backup_dir}/metadata.json" "${logical}" "${expected_uid}"
+        "${state}" "${source}" "${target}" "${metadata}" "${logical}" "${expected_uid}"
 }
 
 capture_state() {
@@ -1009,7 +1013,7 @@ restore_snapshot() {
             "${PYTHON3}" -I "$(release_file deploy/restore_snapshot.py)" \
                 present "${restore_stage}/files/${path#/}" "${target}" "${restore_stage}/metadata.json" "${path}" "${expected_uid}" || return 1
         else
-            atomic_restore_path absent /dev/null "${target}" "${path}"
+            atomic_restore_path absent /dev/null "${target}" "${restore_stage}/metadata.json" "${path}" || return 1
         fi
         write_restore_progress "${state}" "${path}" applied
     done < <(tac "${backup_dir}/manifest")

@@ -289,8 +289,10 @@ dispatch_restore_crash() {
     [[ "${expected_operation_id}" =~ ^[0-9a-f]{64}$ ]] \
         || { printf 'invalid restore crash operation id\n' >&2; exit 97; }
 
-    # Production atomic_restore_path invokes exactly:
+    # Production per-path restore invokes exactly:
     # python3 -I HELPER STATE SOURCE TARGET METADATA LOGICAL EXPECTED_UID.
+    # Present and absent roots must both bind to the authenticated metadata
+    # generated inside the same private materialized restore stage.
     # Delegate verify/metadata/operation-id and other logical roots unchanged;
     # intercept only the authenticated restore operation named by the control.
     (($# == 8)) || return 1

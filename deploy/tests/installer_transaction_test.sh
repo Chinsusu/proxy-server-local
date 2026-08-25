@@ -410,19 +410,20 @@ assert_restore_crash_phase() {
 }
 
 assert_restore_hook_marker() {
-    local fixture="$1" state="$2" logical="$3" point="$4" residue="$5" operation_id="$6"
+    local fixture="$1" state="$2" logical="$3" point="$4" residue="$5" operation_id="$6" metadata="$7"
     local marker="${fixture}/restore-hook-reached.json" nonce
     nonce="$(cut -f4 "${fixture}/restore-crash-control")"
     [[ "${nonce}" =~ ^[0-9a-f]{64}$ && -f "${marker}" && ! -L "${marker}" ]]
     [[ "$(stat -c '%a' "${marker}")" == 600 ]]
     /usr/bin/python3 -I - "${marker}" "${state}" "${logical}" "${point}" \
-        "${residue}" "${operation_id}" "${nonce}" <<'PY'
+        "${residue}" "${operation_id}" "${nonce}" "${metadata}" <<'PY'
 import json,sys
-path,state,logical,point,residue,operation_id,nonce=sys.argv[1:]
+path,state,logical,point,residue,operation_id,nonce,metadata=sys.argv[1:]
 with open(path,"r",encoding="utf-8") as handle:
     actual=json.load(handle)
 expected={"version":1,"state":state,"logical":logical,"point":point,
-          "residue":residue,"operation_id":operation_id,"nonce":nonce}
+          "residue":residue,"metadata":metadata,
+          "operation_id":operation_id,"nonce":nonce}
 if actual != expected: raise SystemExit("restore hook marker mismatch")
 PY
     if find "${fixture}" -maxdepth 1 -name '.restore-hook-reached.tmp.*' -print -quit | grep -q .; then
@@ -753,7 +754,8 @@ if [[ "${section}" == all || "${section}" == restore-crash ]]; then
         [[ "${crash_state}" == present ]] && residue_kind=stage || residue_kind=tomb
         residue_name=".pgw-restore-${residue_kind}-${residue_digest:0:24}"
         assert_restore_hook_marker "${crash_fixture}" "${crash_state}" "${logical}" \
-            "${crash_point}" "${residue_name}" "${expected_id}"
+            "${crash_point}" "${residue_name}" "${expected_id}" \
+            "${restore_stage}/metadata.json"
         assert_restore_crash_phase "${crash_fixture}" "${snapshot}" \
             "${crash_state}" "${crash_point}" "${logical}"
         recover_rc="$(run_failure "${crash_fixture}" recover_restore_crash)"

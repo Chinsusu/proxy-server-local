@@ -33,7 +33,7 @@ def load_restore(path):
     return module
 
 
-def publish_hook_marker(root, state, logical, point, residue, operation_id, nonce):
+def publish_hook_marker(root, state, logical, point, residue, metadata, operation_id, nonce):
     marker = os.path.join(root, "restore-hook-reached.json")
     temporary = os.path.join(root, ".restore-hook-reached.tmp." + nonce)
     if os.path.lexists(marker) or os.path.lexists(temporary):
@@ -45,6 +45,7 @@ def publish_hook_marker(root, state, logical, point, residue, operation_id, nonc
             "logical": logical,
             "point": point,
             "residue": residue,
+            "metadata": metadata,
             "operation_id": operation_id,
             "nonce": nonce,
         },
@@ -111,7 +112,7 @@ def main():
 
     def reached():
         publish_hook_marker(
-            fixture_root, state, logical, point, residue, operation_id, nonce
+            fixture_root, state, logical, point, residue, metadata, operation_id, nonce
         )
 
     if point == "partial_stage":
