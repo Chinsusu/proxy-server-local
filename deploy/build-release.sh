@@ -173,9 +173,14 @@ tool_path="$(dirname -- "$(command -v go)"):/usr/bin:/bin"
 run_go() {
     local cache="$1" proxy="$2"
     shift 2
+    # -modcacherw: this modcache is private to ${stage} and torn down by the
+    # EXIT trap below immediately after this build finishes. Go's normal
+    # read-only module cache protects a persistent, shared cache across
+    # processes; that protection buys nothing here and only makes the
+    # teardown rm -rf fail on read-only extracted module files.
     env -i PATH="${tool_path}" HOME="${stage}/.go/home" TMPDIR="${stage}/.go/tmp" \
         GOROOT="${goroot}" GOENV=off GOTOOLCHAIN=local GOWORK=off GOOS=linux GOARCH=amd64 \
-        CGO_ENABLED=0 GOFLAGS= GOPROXY="${proxy}" GOSUMDB=sum.golang.org \
+        CGO_ENABLED=0 GOFLAGS=-modcacherw GOPROXY="${proxy}" GOSUMDB=sum.golang.org \
         GOMODCACHE="${stage}/.go/modcache" GOCACHE="${cache}" "$@"
 }
 
