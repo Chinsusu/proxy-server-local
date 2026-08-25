@@ -1065,7 +1065,7 @@ PY
         [[ "${state}" == present || "${state}" == absent ]] || die "invalid snapshot manifest state"
         case "${path}" in
             /usr/local/bin/pgw-api|/usr/local/bin/pgw-agent|/usr/local/bin/pgw-fwd|\
-            /usr/local/bin/pgw-ui|/usr/local/bin/pgw-health|\
+            /usr/local/bin/pgw-ui|/usr/local/bin/pgw-health|/usr/local/bin/pgw-snapshot-crypt|\
             /usr/local/sbin/pgw-install-base|/usr/local/sbin/pgw-verify-base|/usr/local/sbin/pgw-verify-ui-bind|\
             /usr/local/share/pgw/web|/etc/pgw/pgw.env|/etc/pgw/jwt_secret|\
             /etc/pgw/agent.token|/etc/pgw/secrets.key|/etc/pgw/admin_pass_hash|\

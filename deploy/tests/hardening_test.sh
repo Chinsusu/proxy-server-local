@@ -198,6 +198,8 @@ assert_contains "${ROOT}/deploy/restore_snapshot.py" 'exchanged restore tree fai
 assert_not_contains "${ROOT}/deploy/restore_snapshot.py" 'token_hex|pgw-restore-absent\.'
 assert_contains "${ROOT}/deploy/install-pgw.sh" 'write_recovery_journal'
 assert_contains "${ROOT}/deploy/install-pgw.sh" 'secure_copy_root_file'
+assert_contains "${ROOT}/deploy/install-pgw.sh" '/usr/local/bin/pgw-ui /usr/local/bin/pgw-health /usr/local/bin/pgw-snapshot-crypt'
+assert_contains "${ROOT}/deploy/install-pgw.sh" '/usr/local/bin/pgw-ui|/usr/local/bin/pgw-health|/usr/local/bin/pgw-snapshot-crypt|'
 assert_not_contains "${ROOT}/deploy/install-pgw.sh" 'CGO_ENABLED=0.*build|PGW_GO_BINARY:-'
 assert_contains "${ROOT}/deploy/launcher/secure_linux.go" 'os.Clearenv()'
 assert_contains "${ROOT}/deploy/launcher/secure_linux.go" 'cmd.Dir = "/"'
