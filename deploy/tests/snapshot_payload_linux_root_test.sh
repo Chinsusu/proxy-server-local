@@ -5,6 +5,10 @@
 # and a private stage before descriptor-bound host restore.
 set -Eeuo pipefail
 
+# sudo resets PATH to the sudoers secure_path, which drops the pinned Go
+# toolchain actions/setup-go placed on PATH for this job (falling back to
+# an older distro-packaged go that doesn't satisfy go.mod's version floor).
+PATH="/usr/local/go/bin:${PATH}"
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 required="${PGW_REQUIRE_SNAPSHOT_PAYLOAD_ROOT_EVIDENCE:-0}"
 [[ "${required}" == 0 || "${required}" == 1 ]] || exit 2
