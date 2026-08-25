@@ -41,6 +41,7 @@ grep -Fxq 'deterministic_builds 2' "${output}/build-proof.manifest"
 [[ "$(grep -c '^binary ' "${output}/build-proof.manifest")" == 6 ]]
 [[ "$(grep -c ' cgo=0 dynamic=absent rebuild=identical proof_sha256=' "${output}/build-proof.manifest")" == 6 ]]
 python3 "${ROOT}/deploy/verify_release_candidate.py" "${output}" >/dev/null
+printf 'DEBUG checkpoint: build+verify done\n' >&2
 
 actual="$(sha256sum "${output}/release/release.manifest" | awk '{print $1}')"
 evidence="${fixture}/evidence"
@@ -125,6 +126,7 @@ EOF
 
 PATH="${fixture}/fake-tools:${PATH}" /bin/bash "${ROOT}/deploy/finalize-release.sh" \
     "${output}" "${evidence}" "${fixture}/candidate" >/dev/null
+printf 'DEBUG checkpoint: finalize-release done\n' >&2
 (
     cd -- "${fixture}/candidate"
     sha256sum -c SHA256SUMS >/dev/null
@@ -143,6 +145,7 @@ for scan in source binary bundle; do
 done
 /bin/bash "${ROOT}/deploy/close-release.sh" "${fixture}/candidate" "${fixture}/candidate.tar" >/dev/null
 tar -tf "${fixture}/candidate.tar" | grep -Fxq './promotion.manifest'
+printf 'DEBUG checkpoint: close-release done\n' >&2
 
 # A local caller can never turn candidate metadata into production authority.
 set +e
@@ -151,6 +154,7 @@ PATH="${fixture}/fake-tools:${PATH}" /bin/bash "${ROOT}/deploy/finalize-release.
 production_rc=$?
 set -e
 [[ "${production_rc}" == 65 && ! -e "${fixture}/forbidden-production" ]]
+printf 'DEBUG checkpoint: forbidden-production done\n' >&2
 
 # Exact parser tests update the outer trust digest so failure proves the inner
 # duplicate/path/self-promotion checks, not merely an old checksum mismatch.
@@ -163,6 +167,7 @@ python3 "${ROOT}/deploy/verify_release_candidate.py" "${fixture}/duplicate-manif
 duplicate_rc=$?
 set -e
 [[ "${duplicate_rc}" == 65 ]]
+printf 'DEBUG checkpoint: duplicate-manifest done\n' >&2
 
 cp -a -- "${output}" "${fixture}/self-promoted"
 sed -i 's/^candidate_only true$/candidate_only false/' "${fixture}/self-promoted/version.manifest"
@@ -171,6 +176,7 @@ python3 "${ROOT}/deploy/verify_release_candidate.py" "${fixture}/self-promoted" 
 self_promoted_rc=$?
 set -e
 [[ "${self_promoted_rc}" == 65 ]]
+printf 'DEBUG checkpoint: self-promoted done\n' >&2
 
 cp -a -- "${output}" "${fixture}/traversal-manifest"
 printf 'file %064d 0644 ../escape\n' 0 >>"${fixture}/traversal-manifest/release/release.manifest"
@@ -181,6 +187,7 @@ python3 "${ROOT}/deploy/verify_release_candidate.py" "${fixture}/traversal-manif
 traversal_rc=$?
 set -e
 [[ "${traversal_rc}" == 65 ]]
+printf 'DEBUG checkpoint: traversal-manifest done\n' >&2
 
 cp -a -- "${evidence}" "${fixture}/special-evidence"
 mkfifo "${fixture}/special-evidence/forbidden.fifo"
@@ -190,6 +197,7 @@ PATH="${fixture}/fake-tools:${PATH}" /bin/bash "${ROOT}/deploy/finalize-release.
 special_rc=$?
 set -e
 [[ "${special_rc}" == 65 && ! -e "${fixture}/forbidden-special" ]]
+printf 'DEBUG checkpoint: special-evidence done\n' >&2
 
 cp -a -- "${evidence}" "${fixture}/symlink-evidence"
 ln -s rehearsal.transcript "${fixture}/symlink-evidence/forbidden.link"
@@ -199,9 +207,13 @@ PATH="${fixture}/fake-tools:${PATH}" /bin/bash "${ROOT}/deploy/finalize-release.
 symlink_rc=$?
 set -e
 [[ "${symlink_rc}" == 65 && ! -e "${fixture}/forbidden-symlink" ]]
+printf 'DEBUG checkpoint: symlink-evidence done\n' >&2
 
 /bin/bash "${ROOT}/deploy/tests/attestation_bootstrap_test.sh"
+printf 'DEBUG checkpoint: attestation_bootstrap_test done\n' >&2
 /bin/bash "${ROOT}/deploy/tests/full_system_trust_bootstrap_test.sh"
+printf 'DEBUG checkpoint: full_system_trust_bootstrap_test done\n' >&2
 python3 -B "${ROOT}/deploy/tests/full_system_evidence_parser_test.py"
+printf 'DEBUG checkpoint: full_system_evidence_parser_test done\n' >&2
 
 printf 'release hermeticity, exact-parser, scan-coverage, closure, and trusted-bootstrap tests: PASS\n'
