@@ -1,6 +1,5 @@
 #!/bin/bash
 set -Eeuo pipefail
-[[ -z "${PGW_DEBUG_XTRACE:-}" ]] || set -x
 
 ((EUID != 0)) || { printf 'release finalization must run unprivileged\n' >&2; exit 96; }
 
@@ -220,7 +219,7 @@ syft scan "dir:${stage}/sbom-input" -o "spdx-json=${stage}/pgw.spdx.json" \
     >"${stage}/syft.stdout" 2>"${stage}/syft.stderr"
 jq -e '(.spdxVersion == "SPDX-2.3") and ((.packages // []) | length > 0) and (.documentNamespace | type == "string")' \
     "${stage}/pgw.spdx.json" >/dev/null
-jq -e '[.files[] | select((.executable.format // "" | ascii_downcase) == "elf")] | length == 6' \
+jq -e '[.files[] | select((.executable.format // "" | ascii_downcase) == "elf")] | length == '"${#BINARIES[@]}" \
     "${stage}/pgw.syft.json" >/dev/null
 jq -r '.files[] | select((.executable.format // "" | ascii_downcase) == "elf") |
     .digests[] | select((.algorithm | ascii_downcase) == "sha256") | .value' \
