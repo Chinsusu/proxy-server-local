@@ -335,7 +335,7 @@ def proof_digest(proof_root: Path, name: str) -> str:
 
 def parse_build_proof(root: Path, release_entries: dict[str, tuple[str, int]]) -> list[str]:
     lines = read_text_strict(root / "build-proof.manifest")
-    if len(lines) != 9 or lines[0] != "format pgw-build-proof-v2":
+    if len(lines) != 3 + len(BINARY_PATHS) or lines[0] != "format pgw-build-proof-v2":
         fail("invalid build proof header")
     module_parts = lines[1].split(" ")
     deterministic_parts = lines[2].split(" ")
