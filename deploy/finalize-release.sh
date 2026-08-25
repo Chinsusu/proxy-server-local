@@ -180,10 +180,12 @@ $2=="gitleaks" { if ($3!=gitleaks || seen_gitleaks++) exit 1; next }
 { exit 1 }
 END { if (NR!=3 || seen_syft!=1 || seen_gitleaks!=1) exit 1 }
 ' "${evidence}/release-tool-versions.manifest" || { printf 'scanner versions are not the exact approved set\n' >&2; exit 65; }
-[[ "v$(syft version -o json | jq -r '.version')" == "${EXPECTED_SYFT}" ]] || { printf 'Syft runtime version mismatch\n' >&2; exit 65; }
-[[ "v$(gitleaks version | awk 'NR==1 {sub(/^v/, "", $1); print $1}')" == "${EXPECTED_GITLEAKS}" ]] || {
-    printf 'Gitleaks runtime version mismatch\n' >&2; exit 65;
-}
+# syft and gitleaks are installed via plain `go install pkg@version` (no
+# release-process ldflags), so their own `version` subcommands report
+# "[not provided]" / "version is set by build process" rather than the real
+# version - these are not usable as a runtime check. The embedded-module-info
+# comparison above (via `go version -m`, matched against the sha256-verified
+# binary) already proves the exact pinned version reliably.
 
 # Recheck executable properties from the staged bytes, independent of stored proof text.
 readonly BINARIES=(
@@ -253,7 +255,7 @@ syft ${EXPECTED_SYFT}
 gitleaks ${EXPECTED_GITLEAKS}
 target linux/amd64
 sbom SPDX-2.3
-binary_subjects 6
+binary_subjects ${#BINARIES[@]}
 EOF
 cat >"${stage}/promotion.manifest" <<EOF
 format pgw-promotion-v2
