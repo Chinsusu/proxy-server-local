@@ -77,6 +77,7 @@ setpriv --reuid="${evidence_uid}" --regid="${evidence_gid}" --clear-groups \
     HOME="${fixture}/home" TMPDIR="${fixture}/work" GOCACHE="${fixture}/cache" \
     PGW_EVIDENCE_UID="${evidence_uid}" PGW_EVIDENCE_GID="${evidence_gid}" \
     PGW_EVIDENCE_SOURCE="${fixture}/source" \
+    PGW_TRANSACTION_TEMP_PARENT="${fixture}/work" \
     PGW_REQUIRE_LINUX_RESTORE_CRASH=1 PGW_TRANSACTION_SECTION=restore-crash \
     /bin/bash -c '
         set -Eeuo pipefail
