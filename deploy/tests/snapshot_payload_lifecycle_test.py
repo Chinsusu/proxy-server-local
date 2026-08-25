@@ -56,6 +56,19 @@ def receipt() -> dict[str, object]:
     }
 
 
+for expected_mode, rendered_mode in (
+    (0o000, "0000"), (0o440, "0440"), (0o600, "0600"),
+    (0o755, "0755"), (0o7777, "7777"),
+):
+    expected = metadata()
+    expected.update({"mode": expected_mode, "uid": 18, "gid": 19, "source_inode": 29})
+    arguments = MODULE._expected_arguments(expected)
+    assert arguments[arguments.index("--expect-mode") + 1] == rendered_mode
+    assert arguments[arguments.index("--expect-uid") + 1] == "18"
+    assert arguments[arguments.index("--expect-gid") + 1] == "19"
+    assert arguments[arguments.index("--expect-inode") + 1] == "29"
+
+
 def success(status: str, destination_field: str, destination: str) -> dict[str, object]:
     return {"status": status, **metadata(), destination_field: destination, **receipt()}
 

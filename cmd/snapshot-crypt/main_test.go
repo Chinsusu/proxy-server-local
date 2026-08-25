@@ -15,6 +15,11 @@ func TestParseModeAndNumericIDs(t *testing.T) {
 	if err != nil || mode != 0o640 {
 		t.Fatalf("parseMode = %#o, %v", mode, err)
 	}
+	for input, expected := range map[string]uint32{"0000": 0o0000, "7777": 0o7777} {
+		if mode, err := parseMode(input); err != nil || mode != expected {
+			t.Fatalf("parseMode(%q) = %#o, %v", input, mode, err)
+		}
+	}
 	for _, invalid := range []string{"", "88", "60000", "06x0", "0o600"} {
 		if _, err := parseMode(invalid); err == nil {
 			t.Fatalf("parseMode(%q) accepted", invalid)

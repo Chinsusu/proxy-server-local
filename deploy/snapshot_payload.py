@@ -297,7 +297,8 @@ def _expected_arguments(metadata: dict[str, Any]) -> list[str]:
     }
     arguments: list[str] = []
     for field in METADATA_FIELDS[1:]:
-        arguments.extend(["--" + flags[field], str(metadata[field])])
+        value = format(metadata[field], "04o") if field == "mode" else str(metadata[field])
+        arguments.extend(["--" + flags[field], value])
     return arguments
 
 
