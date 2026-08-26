@@ -8,6 +8,7 @@ readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/ipv6_management_oracle_lib.sh"
 EVIDENCE_FORMAT="$(<"${SCRIPT_DIR}/EVIDENCE_FORMAT")"
 readonly EVIDENCE_FORMAT
+readonly EVIDENCE_CONTRACT="pgw-product-evidence-v1"
 readonly RUN_ID="${BASHPID}"
 readonly RESOURCE_TOKEN="${PGW_E2E_RUN_TOKEN:-${RUN_ID}}"
 readonly NAMESPACE_PREFIX="${PGW_E2E_PREFIX:-pgw-e2e-${RUN_ID}}"
@@ -636,6 +637,7 @@ publish_product_artifacts() {
 
     {
         printf 'format=%s\n' "${EVIDENCE_FORMAT}"
+        printf 'evidence_contract=%s\n' "${EVIDENCE_CONTRACT}"
         printf 'renderer=pkg/nft.RenderBase+RenderDynamic\n'
         printf 'counter_mode=required\n'
         printf 'rendered_sha256=%s\n' "${rendered_sha256}"
@@ -656,10 +658,36 @@ publish_product_artifacts() {
         printf 'rendered_ruleset=product-rendered-ruleset.nft\n'
         printf 'base_ruleset=product-base-ruleset.nft\n'
         printf 'dynamic_ruleset=product-dynamic-ruleset.nft\n'
+        printf 'rendered_sha256_file=product-rendered-ruleset.sha256\n'
         printf 'applied_ruleset_json=product-applied-ruleset.json\n'
         printf 'applied_ruleset_text=product-applied-ruleset.txt\n'
         printf 'counters=product-counters.json\n'
         printf 'probe_log=product-probes.log\n'
+        printf 'valid_dynamic_replacement=product-valid-dynamic-replacement.nft\n'
+        printf 'dynamic_before_invalid_json=product-dynamic-before-invalid.json\n'
+        printf 'dynamic_after_invalid_json=product-dynamic-after-invalid.json\n'
+        printf 'invalid_dynamic_candidate=product-invalid-dynamic-candidate.nft\n'
+        printf 'invalid_dynamic_stdout_log=product-invalid-dynamic.stdout.log\n'
+        printf 'invalid_dynamic_stderr_log=product-invalid-dynamic.stderr.log\n'
+        printf 'base_after_invalid_json=product-base-after-invalid.json\n'
+        printf 'gateway_http_log=gateway-http.log\n'
+        printf 'gateway_http_restarted_log=gateway-http-restarted.log\n'
+        printf 'gateway_dns_tcp_log=gateway-dns-tcp.log\n'
+        printf 'gateway_management_log=gateway-management.log\n'
+        printf 'gateway_management_ipv6_log=gateway-management-ipv6.log\n'
+        printf 'wan_direct_sentinel_log=wan-direct-sentinel.log\n'
+        printf 'wan_http_log=wan-http.log\n'
+        printf 'wan_http6_log=wan-http6.log\n'
+        printf 'udp_control_before_rules_log=udp-control-before-rules.log\n'
+        printf 'udp_blocked_client_log=udp-blocked-client.log\n'
+        printf 'udp_control_after_rules_log=udp-control-after-rules.log\n'
+        printf 'optional_startup_readiness_diagnostics=startup-readiness-diagnostics.txt\n'
+        printf 'optional_readiness_mapped_ipv4_log=readiness-mapped-ipv4.curl.log\n'
+        printf 'optional_readiness_unmapped_ipv4_log=readiness-unmapped-ipv4.curl.log\n'
+        printf 'optional_readiness_ipv6_log=readiness-ipv6.curl.log\n'
+        printf 'optional_readiness_management_ipv6_log=readiness-management-ipv6.curl.log\n'
+        printf 'optional_readiness_direct_sentinel_log=readiness-direct-sentinel.curl.log\n'
+        printf 'optional_counters_capture_error=product-counters.capture-error.txt\n'
     } >"${artifact_dir}/product-manifest.txt"
 }
 
