@@ -120,6 +120,14 @@ capture_product_state() {
     printf 'state_capture=%s\n' "${phase}" >>"${probe_log}"
 }
 
+publish_artifact_permissions() {
+    [[ -n "${artifact_dir}" && -d "${artifact_dir}" ]] || return 0
+
+    chmod 0755 -- "${artifact_dir}" || return 1
+    find "${artifact_dir}" -xdev -type d -exec chmod 0755 -- {} + || return 1
+    find "${artifact_dir}" -xdev -type f -exec chmod 0644 -- {} + || return 1
+}
+
 cleanup() {
     local original_rc=$?
     local cleanup_rc=0
@@ -206,6 +214,10 @@ cleanup() {
         if ! rm -r -- "${tmp_dir}"; then
             cleanup_rc=1
         fi
+    fi
+    if ! publish_artifact_permissions; then
+        printf 'failed to publish runner-readable product artifacts\n' >&2
+        cleanup_rc=1
     fi
     if [[ -n "${probe_log}" && -f "${probe_log}" ]]; then
         printf 'cleanup_rc=%d\n' "${cleanup_rc}" >>"${probe_log}"
@@ -629,7 +641,7 @@ publish_product_artifacts() {
 [[ "${PGW_E2E_REQUIRE_BASE_KILL_SWITCH:-1}" == "1" ]] || \
     fail "Wave 1 E2E requires PGW_E2E_REQUIRE_BASE_KILL_SWITCH=1"
 
-for command_name in ip nft ss python3 curl tcpdump sysctl install sha256sum awk grep mktemp mv rm cmp; do
+for command_name in ip nft ss python3 curl tcpdump sysctl install sha256sum awk grep find chmod mktemp mv rm cmp; do
     require_command "${command_name}"
 done
 if [[ -n "${PGW_E2E_RENDER_FIXTURE:-}" ]]; then
