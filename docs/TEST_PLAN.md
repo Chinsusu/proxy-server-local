@@ -83,7 +83,7 @@ promotion result.
 | P1-01 | `web_only` / TCP allowlist, `all_tcp` off | Positive TCP/80 and TCP/443 tests plus negative non-web TCP, UDP, and IPv6 tests. |
 | P1-02 | `INCOMPATIBLE` vs `DEGRADED` | A policy-capability mismatch is reported as incompatible, never as transient degraded health. |
 | P1-03 | HTTPS adapter and CA/SNI/custom CA | Valid and invalid certificate chains, SNI, custom CA, and no-fallback tests. |
-| P1-04 | SOCKS5 auth, remote DNS, UDP false | Auth success/failure and remote DNS tests; UDP remains positively denied. |
+| P1-04 | SOCKS5 remote-DNS capability and production validation, UDP false | CONNECT/auth forwarding is repository-tested. Add capability-state and host/canary remote-DNS validation; UDP remains positively denied. |
 | P1-05 | MAC/VLAN identity and DNS policy | Identity movement/spoofing and DNS allow/deny tests remain fail-close. |
 | P1-06 | UI validation and egress proof | Invalid policy input is blocked; displayed proof links to independently captured client/packet evidence. |
 

@@ -23,7 +23,7 @@
 | P1-01 | Retain `web_only` TCP allowlist and keep `all_tcp` off | Only approved TCP ports are redirected; UDP and IPv6 remain denied. | Deferred; current default is `web_only`. |
 | P1-02 | Represent probe/capability `INCOMPATIBLE` separately from `DEGRADED` | A policy-capability mismatch cannot appear as transient health degradation. | Deferred. |
 | P1-03 | Add an HTTPS adapter with CA/SNI/custom-CA controls | Positive and negative TLS/CA/SNI cases pass without fallback. | Deferred. |
-| P1-04 | Add SOCKS5 auth and remote-DNS behavior while UDP remains false | Authentication and remote DNS pass; UDP remains explicitly denied. | Deferred. |
+| P1-04 | Complete SOCKS5 remote-DNS capability and production validation while UDP remains false | CONNECT/auth forwarding exists in code. Complete capability semantics and host/canary/production validation for remote DNS; UDP remains explicitly denied. | Partially implemented; P1 validation deferred. |
 | P1-05 | Add MAC/VLAN identity and DNS policy | Identity changes and DNS failures remain fail-close and auditable. | Deferred. |
 | P1-06 | Add UI validation and client egress proof | UI validates policy inputs and presents independently captured egress proof. | Deferred. |
 

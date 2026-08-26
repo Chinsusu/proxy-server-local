@@ -13,7 +13,7 @@ promotion.
 | V2-R5 | Credentials leak through an untested host integration | L | Critical | Use systemd credentials; review API/log/audit output during P0-06 canary validation. Never use plaintext environment variables. | Security | Open — host acceptance pending |
 | V2-R6 | Metrics/status can be mistaken for proof of client egress | M | H | Treat UI/API state as observability only. Obtain separate client-side and packet-capture evidence; P1-06 formalizes egress proof. | QA/Platform | Open |
 | V2-R7 | A repository CI candidate is mistaken for an approved production release | M | Critical | Keep promotion fail-closed. P0-09 remains `BLOCKED_UNPROVISIONED` until an independent external attestor/orchestrator is provisioned. | Release/Security | Open — blocked |
-| V2-R8 | P1 protocol, DNS, or identity features broaden egress before P0 is closed | M | Critical | Do not enable `all_tcp`, UDP, IPv6, HTTPS/SOCKS extensions, or MAC/VLAN/DNS policy work as a release shortcut. Require P0 closure and capability-specific design/tests. | Product/Security | Open — deferred |
+| V2-R8 | P1 protocol, DNS, or identity features broaden egress before P0 is closed | M | Critical | Do not enable `all_tcp`, UDP, IPv6, HTTPS extensions, or MAC/VLAN/DNS policy work as a release shortcut. SOCKS5 CONNECT/auth forwarding exists, but remote-DNS capability and host/canary/production validation still require P1 evidence. | Product/Security | Open — deferred |
 
 ## Historical v1.1 register — retained for context only
 

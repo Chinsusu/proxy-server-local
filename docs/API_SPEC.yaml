@@ -21,8 +21,10 @@ info:
 
     The P0 policy is web_only: TCP ports 80 and 443 only. UDP and IPv6 remain
     denied. No direct-WAN fallback exists. P1 extensions, including all_tcp,
-    HTTPS/CA/SNI behavior, SOCKS5 remote DNS semantics, MAC/VLAN identity, and
-    UI egress proof, are deferred until P0 closes.
+    HTTPS/CA/SNI behavior, SOCKS5 capability/remote-DNS production validation,
+    MAC/VLAN identity, and UI egress proof, are deferred until P0 closes.
+    SOCKS5 CONNECT forwarding with optional username/password authentication
+    exists in the current implementation; UDP remains denied.
 servers:
   - url: http://127.0.0.1:8080
     description: Local API listener used by the UI/reverse-proxy deployment.
@@ -367,6 +369,8 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
   /v2/mappings/{id}:
@@ -697,7 +701,7 @@ components:
     ProxyType:
       type: string
       enum: [http, socks5]
-      description: Current control-plane proxy type. P1 SOCKS5 remote-DNS behavior is not enabled by this field; UDP remains denied.
+      description: Current control-plane proxy type. SOCKS5 CONNECT forwarding with optional username/password authentication is implemented. P1 retains capability-state and host/canary/production validation for remote-DNS behavior; UDP remains denied.
     ProxyStatus:
       type: string
       enum: [OK, DEGRADED, DOWN]
@@ -873,6 +877,10 @@ components:
       type: string
       enum: [VERIFIED, UNKNOWN, FAILED]
       description: Observed reconciliation result. VERIFIED is not an independent client-egress proof.
+    ReconcileRuntimeState:
+      type: string
+      enum: [PENDING, VERIFIED, UNKNOWN, FAILED]
+      description: Current Agent reconcile runtime state. PENDING is distinct from the mapping data-plane state enum.
     MappingCreate:
       type: object
       additionalProperties: false
@@ -954,7 +962,7 @@ components:
         ruleset_hash:
           type: string
         state:
-          $ref: '#/components/schemas/DataPlaneState'
+          $ref: '#/components/schemas/ReconcileRuntimeState'
         last_error:
           type: string
         updated_at:

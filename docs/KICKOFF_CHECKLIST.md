@@ -19,8 +19,9 @@
   Release owners.
 - [ ] Configure and independently verify `main` protection, required checks,
   CODEOWNERS, and non-author review requirements in GitHub administration.
-- [ ] Confirm CI runners can execute unprivileged repository validation only;
-  they receive no deploy credential, release trust root, or signing authority.
+- [ ] Confirm CI runners use scoped, ephemeral privileged namespace/systemd
+  isolation tests only where required; they receive no deploy credential,
+  release trust root, or signing authority.
 - [ ] Record the change, incident, and evidence-retention process in the team
   delivery system.
 

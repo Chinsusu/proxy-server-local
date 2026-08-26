@@ -46,7 +46,7 @@ following items are approved as the next sequence, not as production claims.
 | P1-01 | `web_only` policy and TCP allowlist, with `all_tcp` off | The v2 default is `web_only` (TCP 80/443); no `all_tcp` policy is enabled. Further policy expansion is deferred. |
 | P1-02 | Capability/probe state distinguishes `INCOMPATIBLE` from `DEGRADED` | Deferred; do not infer capability from a proxy protocol label or a health result. |
 | P1-03 | HTTPS adapter with CA, SNI, and custom-CA handling | Deferred pending P0 closure and a capability-safe contract. |
-| P1-04 | SOCKS5 adapter with authentication, remote DNS, and UDP explicitly false | Deferred as a P1 capability; UDP remains denied. |
+| P1-04 | SOCKS5 adapter with authentication, remote DNS, and UDP explicitly false | SOCKS5 CONNECT/auth forwarding exists and is repository-tested. Remote-DNS capability semantics and host/canary/production validation remain P1; UDP remains denied. |
 | P1-05 | MAC/VLAN client identity and DNS policy | Deferred; v2 P0 identity is IPv4 host CIDR only and IPv6 is deny-only. |
 | P1-06 | UI validation and egress proof | Deferred; P0 UI/status paths must not be represented as proof of client egress. |
 
