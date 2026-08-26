@@ -60,6 +60,7 @@ var requiredReleaseEntries = []string{
 	"deploy/install-pgw-base.sh", "deploy/pgw-verify-base.sh", "deploy/nftables.conf", "deploy/sysctl-pgw.conf",
 	"deploy/pgw-verify-ui-bind.sh",
 	"deploy/restore_snapshot.py",
+	"deploy/snapshot_payload.py",
 	"deploy/tests/installer_harness.sh", "deploy/tests/installer_transaction_test.sh",
 	"deploy/tests/release_launcher_root_test.sh", "deploy/tests/lifecycle_fake.sh",
 	"deploy/tests/release_snapshot.py", "deploy/tests/restore_crash_driver.py",

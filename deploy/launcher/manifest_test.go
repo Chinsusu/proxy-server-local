@@ -63,6 +63,7 @@ func TestReleaseAllowlistPinsRehearsalOrchestration(t *testing.T) {
 		"deploy/tests/lifecycle_fake.sh":             false,
 		"deploy/tests/release_snapshot.py":           false,
 		"deploy/tests/restore_crash_driver.py":       false,
+		"deploy/snapshot_payload.py":                 false,
 	}
 	seen := make(map[string]bool, len(requiredReleaseEntries))
 	for _, name := range requiredReleaseEntries {
