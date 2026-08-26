@@ -32,6 +32,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          umask 0077
           install -d -m 0700 "$RUNNER_TEMP/pgw-netns-evidence"
           {
             echo "run_id=$GITHUB_RUN_ID"
@@ -95,6 +96,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          umask 0077
 
           evidence="$RUNNER_TEMP/pgw-netns-evidence"
           install -d -m 0700 "$evidence"
@@ -106,7 +108,7 @@ jobs:
           veth_gateway="pg${run_token}"
           resource_manifest="$evidence/resources-${run_token}.tsv"
           product_artifacts="$RUNNER_TEMP/.pgw-e2e-product-source-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          staged_product_artifacts="$RUNNER_TEMP/.pgw-e2e-product-validated-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          staged_product_artifacts="$RUNNER_TEMP/.pgw-e2e-product-package-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           product_stage_work="$RUNNER_TEMP/.pgw-e2e-product-staging-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           harness=""
           if [[ -f "test/e2e/netns_legacy_web_only.sh" ]]; then
@@ -247,6 +249,99 @@ jobs:
 
           if [[ -n "$harness" ]]; then
             base_kill_switch=1
+            artifact_keys=(
+              rendered_ruleset
+              base_ruleset
+              dynamic_ruleset
+              rendered_sha256_file
+              applied_ruleset_json
+              applied_ruleset_text
+              counters
+              probe_log
+              valid_dynamic_replacement
+              dynamic_before_invalid_json
+              dynamic_after_invalid_json
+              invalid_dynamic_candidate
+              invalid_dynamic_stdout_log
+              invalid_dynamic_stderr_log
+              base_after_invalid_json
+              gateway_http_log
+              gateway_http_restarted_log
+              gateway_dns_tcp_log
+              gateway_management_log
+              gateway_management_ipv6_log
+              wan_direct_sentinel_log
+              wan_http_log
+              wan_http6_log
+              udp_control_before_rules_log
+              udp_blocked_client_log
+              udp_control_after_rules_log
+            )
+            optional_artifact_keys=(
+              optional_startup_readiness_diagnostics
+              optional_readiness_mapped_ipv4_log
+              optional_readiness_unmapped_ipv4_log
+              optional_readiness_ipv6_log
+              optional_readiness_management_ipv6_log
+              optional_readiness_direct_sentinel_log
+              optional_counters_capture_error
+            )
+            declare -A expected_artifact_names=(
+              [rendered_ruleset]="product-rendered-ruleset.nft"
+              [base_ruleset]="product-base-ruleset.nft"
+              [dynamic_ruleset]="product-dynamic-ruleset.nft"
+              [rendered_sha256_file]="product-rendered-ruleset.sha256"
+              [applied_ruleset_json]="product-applied-ruleset.json"
+              [applied_ruleset_text]="product-applied-ruleset.txt"
+              [counters]="product-counters.json"
+              [probe_log]="product-probes.log"
+              [valid_dynamic_replacement]="product-valid-dynamic-replacement.nft"
+              [dynamic_before_invalid_json]="product-dynamic-before-invalid.json"
+              [dynamic_after_invalid_json]="product-dynamic-after-invalid.json"
+              [invalid_dynamic_candidate]="product-invalid-dynamic-candidate.nft"
+              [invalid_dynamic_stdout_log]="product-invalid-dynamic.stdout.log"
+              [invalid_dynamic_stderr_log]="product-invalid-dynamic.stderr.log"
+              [base_after_invalid_json]="product-base-after-invalid.json"
+              [gateway_http_log]="gateway-http.log"
+              [gateway_http_restarted_log]="gateway-http-restarted.log"
+              [gateway_dns_tcp_log]="gateway-dns-tcp.log"
+              [gateway_management_log]="gateway-management.log"
+              [gateway_management_ipv6_log]="gateway-management-ipv6.log"
+              [wan_direct_sentinel_log]="wan-direct-sentinel.log"
+              [wan_http_log]="wan-http.log"
+              [wan_http6_log]="wan-http6.log"
+              [udp_control_before_rules_log]="udp-control-before-rules.log"
+              [udp_blocked_client_log]="udp-blocked-client.log"
+              [udp_control_after_rules_log]="udp-control-after-rules.log"
+            )
+            declare -A expected_optional_artifact_names=(
+              [optional_startup_readiness_diagnostics]="startup-readiness-diagnostics.txt"
+              [optional_readiness_mapped_ipv4_log]="readiness-mapped-ipv4.curl.log"
+              [optional_readiness_unmapped_ipv4_log]="readiness-unmapped-ipv4.curl.log"
+              [optional_readiness_ipv6_log]="readiness-ipv6.curl.log"
+              [optional_readiness_management_ipv6_log]="readiness-management-ipv6.curl.log"
+              [optional_readiness_direct_sentinel_log]="readiness-direct-sentinel.curl.log"
+              [optional_counters_capture_error]="product-counters.capture-error.txt"
+            )
+            product_allowlist=(product-manifest.txt)
+            for key in "${artifact_keys[@]}"; do
+              product_allowlist+=("${expected_artifact_names[$key]}")
+            done
+            for key in "${optional_artifact_keys[@]}"; do
+              product_allowlist+=("${expected_optional_artifact_names[$key]}")
+            done
+            declare -A seen_product_artifacts=()
+            for artifact_name in "${product_allowlist[@]}"; do
+              [[ "$artifact_name" == "$(basename -- "$artifact_name")" && \
+                  ! -v "seen_product_artifacts[$artifact_name]" ]] || {
+                echo "product_evidence_contract=FAILED:duplicate_or_invalid_filename" \
+                  >> "$evidence/summary.txt"
+                exit 1
+              }
+              seen_product_artifacts["$artifact_name"]=1
+            done
+            echo "product_evidence_contract=pgw-product-evidence-v1" \
+              >> "$evidence/summary.txt"
             set +e
             sudo -n env \
               PATH="$PATH" \
@@ -261,12 +356,14 @@ jobs:
               PGW_EVIDENCE_DIR="$evidence" \
               PGW_E2E_BIN_DIR="$RUNNER_TEMP/pgw-e2e-bin" \
               bash "$harness" 2>&1 | tee "$evidence/harness.log"
-            harness_rc=${PIPESTATUS[0]}
+            harness_exit_rc=${PIPESTATUS[0]}
+            harness_rc=$harness_exit_rc
             set -e
             echo "product_harness=RUN" >> "$evidence/summary.txt"
             echo "product_harness_path=$harness" >> "$evidence/summary.txt"
-            echo "product_harness_exit=$harness_rc" >> "$evidence/summary.txt"
+            echo "product_harness_exit=$harness_exit_rc" >> "$evidence/summary.txt"
 
+            product_tree_safe=0
             if [[ -d "$product_artifacts" && ! -L "$product_artifacts" ]]; then
               unsupported_entry=""
               unreadable_inventory="$evidence/product-unreadable-artifacts.txt"
@@ -292,6 +389,7 @@ jobs:
               else
                 echo "product_artifact_tree_validation=PASS" >> "$evidence/summary.txt"
                 echo "product_artifact_tree_readability=PASS" >> "$evidence/summary.txt"
+                product_tree_safe=1
               fi
             else
               echo "product_artifact_tree_validation=FAILED:invalid_root" \
@@ -299,21 +397,23 @@ jobs:
               harness_rc=1
             fi
 
+            artifact_inventory="$evidence/product-artifact-inventory.txt"
+            manifest_file="$product_artifacts/product-manifest.txt"
+            if [[ "$product_tree_safe" -eq 1 ]]; then
+              find -P "$product_artifacts" -maxdepth 1 -type f -printf '%f\n' \
+                | sort > "$artifact_inventory"
+            else
+              : > "$artifact_inventory"
+            fi
+
+            evidence_error() {
+              echo "product_evidence_error=$1" >> "$evidence/summary.txt"
+              harness_rc=1
+            }
+
+            semantic_status="NOT_RUN"
             if [[ "$harness_rc" -eq 0 ]]; then
-              artifact_inventory="$evidence/product-artifact-inventory.txt"
-              manifest_file="$product_artifacts/product-manifest.txt"
-              if [[ -d "$product_artifacts" ]]; then
-                find -P "$product_artifacts" -maxdepth 1 -type f -printf '%f\n' \
-                  | sort > "$artifact_inventory"
-              else
-                : > "$artifact_inventory"
-              fi
-
-              evidence_error() {
-                echo "product_evidence_error=$1" >> "$evidence/summary.txt"
-                harness_rc=1
-              }
-
+              semantic_status="FAILED"
               declare -A product_manifest=()
               if [[ ! -f "$manifest_file" ]]; then
                 evidence_error "missing_manifest"
@@ -335,6 +435,8 @@ jobs:
 
               required_keys=(
                 format
+                evidence_contract
+                evidence_state
                 renderer
                 rendered_sha256
                 run_token
@@ -348,14 +450,8 @@ jobs:
                 gateway_lan_veth
                 gateway_wan_veth
                 wan_veth
-                rendered_ruleset
-                base_ruleset
-                dynamic_ruleset
-                applied_ruleset_json
-                applied_ruleset_text
-                counters
-                probe_log
               )
+              required_keys+=("${artifact_keys[@]}" "${optional_artifact_keys[@]}")
               for key in "${required_keys[@]}"; do
                 [[ -n "${product_manifest[$key]:-}" ]] || evidence_error "missing_manifest_key:$key"
               done
@@ -365,6 +461,10 @@ jobs:
                 evidence_error "invalid_repository_evidence_format"
               [[ "${product_manifest[format]:-}" == "$expected_evidence_format" ]] || \
                 evidence_error "invalid_manifest_format"
+              [[ "${product_manifest[evidence_contract]:-}" == "pgw-product-evidence-v1" ]] || \
+                evidence_error "invalid_evidence_contract"
+              [[ "${product_manifest[evidence_state]:-}" == "complete" ]] || \
+                evidence_error "incomplete_evidence_manifest"
               [[ "${product_manifest[run_token]:-}" == "$run_token" ]] || \
                 evidence_error "manifest_run_token_mismatch"
               [[ "${product_manifest[namespace_prefix]:-}" == "$prefix" ]] || \
@@ -407,24 +507,6 @@ jobs:
                 fi
               done
 
-              artifact_keys=(
-                rendered_ruleset
-                base_ruleset
-                dynamic_ruleset
-                applied_ruleset_json
-                applied_ruleset_text
-                counters
-                probe_log
-              )
-              declare -A expected_artifact_names=(
-                [rendered_ruleset]="product-rendered-ruleset.nft"
-                [base_ruleset]="product-base-ruleset.nft"
-                [dynamic_ruleset]="product-dynamic-ruleset.nft"
-                [applied_ruleset_json]="product-applied-ruleset.json"
-                [applied_ruleset_text]="product-applied-ruleset.txt"
-                [counters]="product-counters.json"
-                [probe_log]="product-probes.log"
-              )
               declare -A product_artifact_files=()
               for key in "${artifact_keys[@]}"; do
                 artifact_name="${expected_artifact_names[$key]}"
@@ -432,20 +514,49 @@ jobs:
                   evidence_error "noncanonical_artifact_reference:$key"
                 artifact_file="$product_artifacts/$artifact_name"
                 product_artifact_files["$key"]="$artifact_file"
-                [[ -f "$artifact_file" && ! -L "$artifact_file" && -s "$artifact_file" ]] || \
+                [[ -f "$artifact_file" && ! -L "$artifact_file" ]] || \
                   evidence_error "invalid_artifact_file:$(basename -- "$artifact_file")"
                 [[ -r "$artifact_file" ]] || \
                   evidence_error "unreadable_artifact_file:$(basename -- "$artifact_file")"
+                if [[ "$key" != "invalid_dynamic_stdout_log" && ! -s "$artifact_file" ]]; then
+                  evidence_error "empty_artifact_file:$(basename -- "$artifact_file")"
+                fi
+              done
+              for key in "${optional_artifact_keys[@]}"; do
+                artifact_name="${expected_optional_artifact_names[$key]}"
+                [[ "${product_manifest[$key]:-}" == "$artifact_name" ]] || \
+                  evidence_error "noncanonical_optional_artifact_reference:$key"
               done
 
+              nested_entry="$(find -P "$product_artifacts" -xdev -mindepth 2 \
+                -printf '%P\n' -quit)"
+              [[ -z "$nested_entry" ]] || evidence_error "nested_product_artifact:$nested_entry"
+              while IFS= read -r artifact_name; do
+                [[ -v "seen_product_artifacts[$artifact_name]" ]] || \
+                  evidence_error "undeclared_product_artifact:$artifact_name"
+              done < "$artifact_inventory"
+
               rendered_file="${product_artifact_files[rendered_ruleset]}"
+              rendered_sha_file="${product_artifact_files[rendered_sha256_file]}"
               ruleset_file="${product_artifact_files[applied_ruleset_json]}"
               counters_file="${product_artifact_files[counters]}"
+              dynamic_before_file="${product_artifact_files[dynamic_before_invalid_json]}"
+              dynamic_after_file="${product_artifact_files[dynamic_after_invalid_json]}"
+              base_after_file="${product_artifact_files[base_after_invalid_json]}"
 
               if [[ -f "$rendered_file" ]]; then
                 actual_rendered_sha256="$(sha256sum "$rendered_file" | cut -d' ' -f1)"
                 [[ "$actual_rendered_sha256" == "${product_manifest[rendered_sha256]:-}" ]] || \
                   evidence_error "rendered_sha256_mismatch"
+              fi
+              if [[ -f "$rendered_sha_file" ]]; then
+                sidecar_sha=""
+                sidecar_name=""
+                read -r sidecar_sha sidecar_name < "$rendered_sha_file" || \
+                  evidence_error "unreadable_rendered_sha256_sidecar"
+                [[ "$sidecar_sha" == "${product_manifest[rendered_sha256]:-}" && \
+                    "$sidecar_name" == "product-rendered-ruleset.nft" ]] || \
+                  evidence_error "invalid_rendered_sha256_sidecar"
               fi
 
               if [[ -f "$ruleset_file" ]] && ! jq -e '
@@ -483,38 +594,126 @@ jobs:
                 fi
               fi
 
+              for json_spec in \
+                "$dynamic_before_file:pgw_dynamic" \
+                "$dynamic_after_file:pgw_dynamic" \
+                "$base_after_file:pgw_base"; do
+                json_file="${json_spec%:*}"
+                expected_table="${json_spec##*:}"
+                if [[ -f "$json_file" ]] && ! jq -e --arg table "$expected_table" '
+                  ((.nftables | type) == "array") and
+                  ((.nftables | length) > 0) and
+                  ([.nftables[]? | .table? |
+                    select((type == "object") and (.family == "inet") and (.name == $table))] |
+                    length > 0)
+                ' "$json_file" >/dev/null; then
+                  evidence_error "invalid_lkg_json:$(basename -- "$json_file")"
+                fi
+              done
+              if [[ -f "$dynamic_before_file" && -f "$dynamic_after_file" ]] && \
+                  ! cmp -s "$dynamic_before_file" "$dynamic_after_file"; then
+                evidence_error "dynamic_lkg_changed_after_invalid_candidate"
+              fi
+              if [[ -f "${product_artifact_files[invalid_dynamic_candidate]}" ]] && \
+                  ! grep -Fq 'missing_chain' \
+                    "${product_artifact_files[invalid_dynamic_candidate]}"; then
+                evidence_error "invalid_candidate_missing_failure_fixture"
+              fi
+              if [[ -f "${product_artifact_files[probe_log]}" ]] && \
+                  ! grep -Fqx 'PASS Wave 1 namespace enforcement completed' \
+                    "${product_artifact_files[probe_log]}"; then
+                evidence_error "missing_final_probe_pass_marker"
+              fi
+
               if [[ "$harness_rc" -eq 0 ]]; then
+                semantic_status="PASS"
                 echo "product_evidence_validation=PASS" >> "$evidence/summary.txt"
-                if [[ -e "$product_stage_work" || -L "$product_stage_work" || \
-                    -e "$staged_product_artifacts" || -L "$staged_product_artifacts" ]]; then
-                  evidence_error "product_staging_path_already_exists"
-                else
-                  install -d -m 0700 "$product_stage_work"
-                  install -m 0600 -- "$manifest_file" \
-                    "$product_stage_work/product-manifest.txt"
-                  for key in "${artifact_keys[@]}"; do
-                    artifact_name="${expected_artifact_names[$key]}"
-                    install -m 0600 -- "${product_artifact_files[$key]}" \
-                      "$product_stage_work/$artifact_name"
-                  done
-                  staged_unexpected="$(find -P "$product_stage_work" -xdev -mindepth 1 \
-                    ! -type f -printf '%f\n' -quit)"
-                  [[ -z "$staged_unexpected" ]] || \
-                    evidence_error "invalid_product_staging_entry:$staged_unexpected"
-                  if [[ "$harness_rc" -eq 0 ]]; then
-                    mv -- "$product_stage_work" "$staged_product_artifacts"
-                    [[ -d "$staged_product_artifacts" && ! -L "$staged_product_artifacts" ]] || \
-                      evidence_error "invalid_product_staging_root"
-                  fi
-                fi
-                if [[ "$harness_rc" -eq 0 ]]; then
-                  echo "product_evidence_staging=PASS" >> "$evidence/summary.txt"
-                else
-                  echo "product_evidence_staging=FAILED" >> "$evidence/summary.txt"
-                fi
               else
                 echo "product_evidence_validation=FAILED" >> "$evidence/summary.txt"
               fi
+            elif [[ "$harness_exit_rc" -ne 0 ]]; then
+              echo "product_evidence_validation=SKIPPED:harness_failure" \
+                >> "$evidence/summary.txt"
+            else
+              echo "product_evidence_validation=SKIPPED:unsafe_source" \
+                >> "$evidence/summary.txt"
+            fi
+
+            if [[ "$product_tree_safe" -eq 1 ]]; then
+              package_status="UNVALIDATED_FAILURE"
+              [[ "$semantic_status" == "PASS" && "$harness_rc" -eq 0 ]] && \
+                package_status="VALIDATED"
+              if [[ -e "$product_stage_work" || -L "$product_stage_work" || \
+                  -e "$staged_product_artifacts" || -L "$staged_product_artifacts" ]]; then
+                echo "product_evidence_staging=FAILED:path_already_exists" \
+                  >> "$evidence/summary.txt"
+                harness_rc=1
+              else
+                install -d -m 0700 "$product_stage_work"
+                staged_names=()
+                staging_safe=1
+                for artifact_name in "${product_allowlist[@]}"; do
+                  artifact_file="$product_artifacts/$artifact_name"
+                  if [[ -e "$artifact_file" || -L "$artifact_file" ]]; then
+                    if [[ ! -f "$artifact_file" || -L "$artifact_file" || \
+                        ! -r "$artifact_file" ]]; then
+                      echo "product_evidence_staging=FAILED:unsafe_allowlisted_file:$artifact_name" \
+                        >> "$evidence/summary.txt"
+                      harness_rc=1
+                      staging_safe=0
+                      break
+                    fi
+                    install -m 0600 -- "$artifact_file" \
+                      "$product_stage_work/$artifact_name"
+                    staged_names+=("$artifact_name")
+                  fi
+                done
+                if [[ "$staging_safe" -eq 1 ]]; then
+                  manifest_presence="missing"
+                  [[ -f "$product_stage_work/product-manifest.txt" ]] && \
+                    manifest_presence="present"
+                  {
+                    echo "package_contract=pgw-product-evidence-package-v1"
+                    echo "validation=$package_status"
+                    echo "harness_exit=$harness_exit_rc"
+                    echo "semantic_validation=$semantic_status"
+                    echo "allowlist_contract=pgw-product-evidence-v1"
+                    echo "source_manifest_file=product-manifest.txt"
+                    echo "source_manifest_presence=$manifest_presence"
+                    echo "packaged_source_files=${#staged_names[@]}"
+                    echo "digest_file=product-evidence-sha256.txt"
+                  } > "$product_stage_work/product-evidence-status.txt"
+                  chmod 0600 "$product_stage_work/product-evidence-status.txt"
+                  staged_names+=(product-evidence-status.txt)
+                  : > "$product_stage_work/product-evidence-sha256.txt"
+                  for staged_name in "${staged_names[@]}"; do
+                    (cd "$product_stage_work" && sha256sum -- "$staged_name") \
+                      >> "$product_stage_work/product-evidence-sha256.txt"
+                  done
+                  chmod 0600 "$product_stage_work/product-evidence-sha256.txt"
+                  staged_unexpected="$(find -P "$product_stage_work" -xdev -mindepth 1 \
+                    ! -type f -printf '%f\n' -quit)"
+                  if [[ -n "$staged_unexpected" ]]; then
+                    echo "product_evidence_staging=FAILED:unsupported_entry:$staged_unexpected" \
+                      >> "$evidence/summary.txt"
+                    harness_rc=1
+                  else
+                    mv -- "$product_stage_work" "$staged_product_artifacts"
+                    if [[ -d "$staged_product_artifacts" && \
+                        ! -L "$staged_product_artifacts" ]]; then
+                      echo "product_evidence_staging=PASS:$package_status" \
+                        >> "$evidence/summary.txt"
+                    else
+                      echo "product_evidence_staging=FAILED:invalid_staging_root" \
+                        >> "$evidence/summary.txt"
+                      harness_rc=1
+                    fi
+                  fi
+                fi
+              fi
+            else
+              echo "product_evidence_staging=SKIPPED:unsafe_source" \
+                >> "$evidence/summary.txt"
             fi
             exit "$harness_rc"
           fi
@@ -532,9 +731,10 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          umask 0077
 
           evidence_source="$RUNNER_TEMP/pgw-netns-evidence"
-          product_source="$RUNNER_TEMP/.pgw-e2e-product-validated-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          product_source="$RUNNER_TEMP/.pgw-e2e-product-package-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           bundle_work="$RUNNER_TEMP/.pgw-netns-upload-staging-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           bundle="$RUNNER_TEMP/pgw-netns-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
 
