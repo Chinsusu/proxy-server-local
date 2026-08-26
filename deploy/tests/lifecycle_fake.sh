@@ -376,6 +376,14 @@ fake_openssl() {
     elif [[ "$*" == *'-subject'* ]]; then
         printf 'subject=CN=pgw.fixture.test\n'
     elif [[ "$*" == *'-pubkey'* || "$*" == *'-pubout'* || "$*" == *'-outform DER'* ]]; then
+        # -pubin means this fake is the stdin-fed consumer of a pipeline
+        # (validate_tls_pair's `x509 -pubkey | pkey -pubin`). The real openssl
+        # reads that stream; the fake must drain it too, or exiting first
+        # races the upstream writer into SIGPIPE - under the installer's
+        # pipefail the pipeline then returns 141 and errexit kills the
+        # installer with no diagnostic. This was the intermittent
+        # "fake openssl broken pipe" CI flake.
+        [[ "$*" != *'-pubin'* ]] || cat >/dev/null
         printf 'fixture-public-key-der'
     elif [[ "$*" == *'-noout'* ]]; then
         return 0
