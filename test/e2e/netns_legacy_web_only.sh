@@ -145,8 +145,8 @@ publish_artifact_permissions() {
         -exec chown -- "${artifact_owner_uid}:${artifact_owner_gid}" {} + || return 1
     find -P "${artifact_dir}" -xdev -type f \
         -exec chown -- "${artifact_owner_uid}:${artifact_owner_gid}" {} + || return 1
-    find -P "${artifact_dir}" -xdev -type d -exec chmod -- 0750 {} + || return 1
-    find -P "${artifact_dir}" -xdev -type f -exec chmod -- 0640 {} + || return 1
+    find -P "${artifact_dir}" -xdev -type d -exec chmod -- 0700 {} + || return 1
+    find -P "${artifact_dir}" -xdev -type f -exec chmod -- 0600 {} + || return 1
 
     validate_artifact_tree_entries || return 1
 }
@@ -625,9 +625,9 @@ probe_udp_capture() {
 publish_product_artifacts() {
     local rendered_sha256 rules_file="$1" base_rules_file="$2" dynamic_rules_file="$3"
 
-    install -m 0644 "${rules_file}" "${artifact_dir}/product-rendered-ruleset.nft"
-    install -m 0644 "${base_rules_file}" "${artifact_dir}/product-base-ruleset.nft"
-    install -m 0644 "${dynamic_rules_file}" "${artifact_dir}/product-dynamic-ruleset.nft"
+    install -m 0600 "${rules_file}" "${artifact_dir}/product-rendered-ruleset.nft"
+    install -m 0600 "${base_rules_file}" "${artifact_dir}/product-base-ruleset.nft"
+    install -m 0600 "${dynamic_rules_file}" "${artifact_dir}/product-dynamic-ruleset.nft"
     (
         cd -- "${artifact_dir}"
         sha256sum product-rendered-ruleset.nft >product-rendered-ruleset.sha256
