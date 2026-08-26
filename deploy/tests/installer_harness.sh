@@ -210,6 +210,32 @@ if [[ "${boundary}" == recover_restore_crash ]]; then
     trap - EXIT
     exit 0
 fi
+if [[ "${boundary}" == verified_api_descriptor || "${boundary}" == rejected_api_descriptor ]]; then
+    # Production runs only from launcher-held descriptors.  /proc represents
+    # those descriptors as symlinks, so exercise the real preflight contract:
+    # accept the verified descriptor while ordinary release paths still have
+    # their no-symlink check.
+    exec 8<"${artifact_root}/pgw-api"
+    if [[ "${boundary}" == verified_api_descriptor ]]; then
+        export PGW_RELEASE_FD_MAP='artifacts/pgw-api=8'
+    else
+        export PGW_RELEASE_FD_MAP='artifacts/pgw-api=9'
+    fi
+    release_file() {
+        if [[ "$1" == artifacts/pgw-api ]]; then
+            printf '/proc/self/fd/8\n'
+            return
+        fi
+        production_release_file "$1"
+    }
+    allow_legacy=1
+    preflight_legacy_state
+    [[ "${legacy_state_pending}" == 1 && "${legacy_state_checksum}" =~ ^[0-9a-f]{64}$ ]] \
+        || die "verified pgw-api descriptor did not complete legacy preflight"
+    exec 8<&-
+    trap - EXIT
+    exit 0
+fi
 if [[ "${boundary}" == crash_legacy_sealed || "${boundary}" == crash_legacy_post_import ]]; then
     # Both crash points fire from inside import_legacy_state, which is a
     # no-op unless legacy state is pending. The exact checksum is never

@@ -147,6 +147,20 @@ release_file() {
     done
     die "release manifest omitted: ${relative}"
 }
+release_descriptor_matches() {
+    local relative="$1" candidate="$2" entry path fd
+    [[ "${candidate}" =~ ^/proc/self/fd/[0-9]+$ ]] || return 1
+    IFS=';' read -r -a release_entries <<<"${PGW_RELEASE_FD_MAP:-}"
+    for entry in "${release_entries[@]}"; do
+        path="${entry%%=*}"
+        fd="${entry#*=}"
+        if [[ "${path}" == "${relative}" && "${fd}" =~ ^[0-9]+$ && 10#${fd} -ge 3 && \
+              "${candidate}" == "/proc/self/fd/${fd}" && -f "${candidate}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
 ensure_directory() {
     local path="$1" mode="$2"
     if [[ -n "${SYSTEM_ROOT}" ]]; then
@@ -709,11 +723,12 @@ preflight_legacy_state() {
     ((allow_legacy)) || die "legacy state.json detected; rerun with --migrate-legacy after reviewing the migration backup"
     api_binary="$(release_file artifacts/pgw-api)"
     [[ -x "${api_binary}" ]] || die "staged pgw-api migration binary is unavailable"
-    # In a trusted launch, release_file returns a verified inherited descriptor
-    # at /proc/self/fd/N; procfs represents every such descriptor as a
-    # symlink. Ordinary filesystem paths must remain non-symlinks.
-    if [[ "${api_binary}" != /proc/self/fd/* && -L "${api_binary}" ]]; then
-        die "staged pgw-api migration binary is unavailable"
+    # A trusted launch uses the exact FD declared by the launcher's verified
+    # release map. procfs represents that descriptor as a symlink; every other
+    # release path must still be a regular, non-symlink file.
+    if [[ -L "${api_binary}" ]]; then
+        release_descriptor_matches artifacts/pgw-api "${api_binary}" \
+            || die "staged pgw-api migration binary is unavailable"
     fi
     # This runs against an ephemeral SQLite store and cannot create a host
     # database or read the master key before rollback capture.

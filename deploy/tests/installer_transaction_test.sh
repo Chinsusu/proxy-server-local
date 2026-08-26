@@ -988,6 +988,36 @@ PY
 
 index=0
 if [[ "${section}" == all || "${section}" == success ]]; then
+    printf 'verified launcher descriptor accepts legacy migration preflight\n'
+    fixture="${temp_root}/verified-api-descriptor"
+    make_fixture "${fixture}" active
+    printf '{"proxies":{},"clients":{},"mappings":{}}\n' >"${fixture}/system/var/lib/pgw/state.json"
+    rc="$(run_failure "${fixture}" verified_api_descriptor)"
+    [[ "${rc}" == 0 ]] || {
+        printf 'verified descriptor preflight returned %s\n' "${rc}" >&2
+        print_bounded_fixture_evidence "${fixture}"
+        exit 1
+    }
+    grep -Fq 'legacy state dry-run passed' "${fixture}/installer.log" || {
+        printf 'verified descriptor preflight did not report legacy validation\n' >&2
+        cat "${fixture}/installer.log" >&2
+        exit 1
+    }
+    printf 'unmapped launcher descriptor is rejected by legacy preflight\n'
+    fixture="${temp_root}/rejected-api-descriptor"
+    make_fixture "${fixture}" active
+    printf '{"proxies":{},"clients":{},"mappings":{}}\n' >"${fixture}/system/var/lib/pgw/state.json"
+    rc="$(run_failure "${fixture}" rejected_api_descriptor)"
+    [[ "${rc}" == 1 ]] || {
+        printf 'unmapped descriptor preflight returned %s\n' "${rc}" >&2
+        print_bounded_fixture_evidence "${fixture}"
+        exit 1
+    }
+    grep -Fq 'staged pgw-api migration binary is unavailable' "${fixture}/installer.log" || {
+        printf 'unmapped descriptor did not fail the migration preflight\n' >&2
+        cat "${fixture}/installer.log" >&2
+        exit 1
+    }
     printf 'nftables include-aware fixture fidelity\n'
     assert_fake_nft_contract
     printf 'systemd-sysctl absent/present fixture fidelity\n'
