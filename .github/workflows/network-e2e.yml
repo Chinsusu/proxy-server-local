@@ -32,7 +32,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          install -d -m 0755 "$RUNNER_TEMP/pgw-netns-evidence"
+          install -d -m 0700 "$RUNNER_TEMP/pgw-netns-evidence"
           {
             echo "run_id=$GITHUB_RUN_ID"
             echo "run_attempt=$GITHUB_RUN_ATTEMPT"
@@ -97,7 +97,7 @@ jobs:
           set -Eeuo pipefail
 
           evidence="$RUNNER_TEMP/pgw-netns-evidence"
-          install -d -m 0755 "$evidence"
+          install -d -m 0700 "$evidence"
           run_token="$(printf '%s' "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" | sha256sum | cut -c1-10)"
           prefix="pgw-e2e-${run_token}"
           ns_client="${prefix}-client"
@@ -105,7 +105,9 @@ jobs:
           veth_client="pc${run_token}"
           veth_gateway="pg${run_token}"
           resource_manifest="$evidence/resources-${run_token}.tsv"
-          product_artifacts="$RUNNER_TEMP/pgw-e2e-product-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          product_artifacts="$RUNNER_TEMP/.pgw-e2e-product-source-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          staged_product_artifacts="$RUNNER_TEMP/.pgw-e2e-product-validated-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          product_stage_work="$RUNNER_TEMP/.pgw-e2e-product-staging-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           harness=""
           if [[ -f "test/e2e/netns_legacy_web_only.sh" ]]; then
             harness="test/e2e/netns_legacy_web_only.sh"
@@ -184,6 +186,17 @@ jobs:
             echo "product_artifact_dir=$product_artifacts"
           } > "$evidence/summary.txt"
 
+          if [[ -e "$product_artifacts" || -L "$product_artifacts" ]]; then
+            echo "product_artifact_source_init=FAILED:already_exists" >> "$evidence/summary.txt"
+            exit 1
+          fi
+          install -d -m 0700 "$product_artifacts"
+          [[ -d "$product_artifacts" && ! -L "$product_artifacts" ]] || {
+            echo "product_artifact_source_init=FAILED:invalid_directory" >> "$evidence/summary.txt"
+            exit 1
+          }
+          echo "product_artifact_source_init=PASS" >> "$evidence/summary.txt"
+
           printf 'netns\t%s\n' "$ns_client" "$ns_gateway" > "$resource_manifest"
           printf 'link\t%s\n' "$veth_client" "$veth_gateway" >> "$resource_manifest"
 
@@ -254,9 +267,19 @@ jobs:
             echo "product_harness_path=$harness" >> "$evidence/summary.txt"
             echo "product_harness_exit=$harness_rc" >> "$evidence/summary.txt"
 
-            if [[ -d "$product_artifacts" ]]; then
+            if [[ -d "$product_artifacts" && ! -L "$product_artifacts" ]]; then
+              unsupported_entry=""
               unreadable_inventory="$evidence/product-unreadable-artifacts.txt"
-              if ! find "$product_artifacts" -xdev -type f ! -readable -printf '%f\n' \
+              if ! unsupported_entry="$(find -P "$product_artifacts" -xdev -mindepth 1 \
+                ! \( -type d -o -type f \) -printf '%f\n' -quit)"; then
+                echo "product_artifact_tree_validation=FAILED:tree_walk" \
+                  >> "$evidence/summary.txt"
+                harness_rc=1
+              elif [[ -n "$unsupported_entry" ]]; then
+                echo "product_artifact_tree_validation=FAILED:unsupported_entry:$unsupported_entry" \
+                  >> "$evidence/summary.txt"
+                harness_rc=1
+              elif ! find -P "$product_artifacts" -xdev -type f ! -readable -printf '%f\n' \
                 | sort > "$unreadable_inventory"; then
                 echo "product_artifact_tree_readability=FAILED:tree_walk" \
                   >> "$evidence/summary.txt"
@@ -267,8 +290,13 @@ jobs:
                   >> "$evidence/summary.txt"
                 harness_rc=1
               else
+                echo "product_artifact_tree_validation=PASS" >> "$evidence/summary.txt"
                 echo "product_artifact_tree_readability=PASS" >> "$evidence/summary.txt"
               fi
+            else
+              echo "product_artifact_tree_validation=FAILED:invalid_root" \
+                >> "$evidence/summary.txt"
+              harness_rc=1
             fi
 
             if [[ "$harness_rc" -eq 0 ]]; then
@@ -388,12 +416,20 @@ jobs:
                 counters
                 probe_log
               )
+              declare -A expected_artifact_names=(
+                [rendered_ruleset]="product-rendered-ruleset.nft"
+                [base_ruleset]="product-base-ruleset.nft"
+                [dynamic_ruleset]="product-dynamic-ruleset.nft"
+                [applied_ruleset_json]="product-applied-ruleset.json"
+                [applied_ruleset_text]="product-applied-ruleset.txt"
+                [counters]="product-counters.json"
+                [probe_log]="product-probes.log"
+              )
               declare -A product_artifact_files=()
               for key in "${artifact_keys[@]}"; do
-                artifact_name="${product_manifest[$key]:-}"
-                if [[ -z "$artifact_name" || "$artifact_name" != "$(basename -- "$artifact_name")" ]]; then
-                  evidence_error "invalid_artifact_reference:$key"
-                fi
+                artifact_name="${expected_artifact_names[$key]}"
+                [[ "${product_manifest[$key]:-}" == "$artifact_name" ]] || \
+                  evidence_error "noncanonical_artifact_reference:$key"
                 artifact_file="$product_artifacts/$artifact_name"
                 product_artifact_files["$key"]="$artifact_file"
                 [[ -f "$artifact_file" && ! -L "$artifact_file" && -s "$artifact_file" ]] || \
@@ -449,6 +485,33 @@ jobs:
 
               if [[ "$harness_rc" -eq 0 ]]; then
                 echo "product_evidence_validation=PASS" >> "$evidence/summary.txt"
+                if [[ -e "$product_stage_work" || -L "$product_stage_work" || \
+                    -e "$staged_product_artifacts" || -L "$staged_product_artifacts" ]]; then
+                  evidence_error "product_staging_path_already_exists"
+                else
+                  install -d -m 0700 "$product_stage_work"
+                  install -m 0600 -- "$manifest_file" \
+                    "$product_stage_work/product-manifest.txt"
+                  for key in "${artifact_keys[@]}"; do
+                    artifact_name="${expected_artifact_names[$key]}"
+                    install -m 0600 -- "${product_artifact_files[$key]}" \
+                      "$product_stage_work/$artifact_name"
+                  done
+                  staged_unexpected="$(find -P "$product_stage_work" -xdev -mindepth 1 \
+                    ! -type f -printf '%f\n' -quit)"
+                  [[ -z "$staged_unexpected" ]] || \
+                    evidence_error "invalid_product_staging_entry:$staged_unexpected"
+                  if [[ "$harness_rc" -eq 0 ]]; then
+                    mv -- "$product_stage_work" "$staged_product_artifacts"
+                    [[ -d "$staged_product_artifacts" && ! -L "$staged_product_artifacts" ]] || \
+                      evidence_error "invalid_product_staging_root"
+                  fi
+                fi
+                if [[ "$harness_rc" -eq 0 ]]; then
+                  echo "product_evidence_staging=PASS" >> "$evidence/summary.txt"
+                else
+                  echo "product_evidence_staging=FAILED" >> "$evidence/summary.txt"
+                fi
               else
                 echo "product_evidence_validation=FAILED" >> "$evidence/summary.txt"
               fi
@@ -463,13 +526,71 @@ jobs:
             exit 2
           fi
 
-      - name: Upload namespace evidence
+      - name: Prepare link-free evidence bundle
+        id: prepare_upload
         if: ${{ always() }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          evidence_source="$RUNNER_TEMP/pgw-netns-evidence"
+          product_source="$RUNNER_TEMP/.pgw-e2e-product-validated-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          bundle_work="$RUNNER_TEMP/.pgw-netns-upload-staging-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          bundle="$RUNNER_TEMP/pgw-netns-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
+          stage_tree() {
+            local source="$1"
+            local destination="$2"
+            local entry relative unsupported_entry
+
+            [[ -d "$source" && ! -L "$source" ]] || {
+              echo "refusing unsafe upload source root: $source" >&2
+              return 1
+            }
+            find -P "$source" -xdev -mindepth 1 -print0 >/dev/null
+            unsupported_entry="$(find -P "$source" -xdev -mindepth 1 \
+              ! \( -type d -o -type f \) -printf '%f\n' -quit)"
+            [[ -z "$unsupported_entry" ]] || {
+              echo "refusing unsupported upload entry: $unsupported_entry" >&2
+              return 1
+            }
+
+            install -d -m 0700 "$destination"
+            while IFS= read -r -d '' entry; do
+              relative="${entry#"$source"/}"
+              install -d -m 0700 "$destination/$relative"
+            done < <(find -P "$source" -xdev -mindepth 1 -type d -print0)
+            while IFS= read -r -d '' entry; do
+              relative="${entry#"$source"/}"
+              install -m 0600 -- "$entry" "$destination/$relative"
+            done < <(find -P "$source" -xdev -mindepth 1 -type f -print0)
+
+            unsupported_entry="$(find -P "$destination" -xdev -mindepth 1 \
+              ! \( -type d -o -type f \) -printf '%f\n' -quit)"
+            [[ -z "$unsupported_entry" ]]
+          }
+
+          if [[ -e "$bundle_work" || -L "$bundle_work" || \
+              -e "$bundle" || -L "$bundle" ]]; then
+            echo "refusing pre-existing upload staging path" >&2
+            exit 1
+          fi
+          install -d -m 0700 "$bundle_work"
+          stage_tree "$evidence_source" "$bundle_work/pgw-netns-evidence"
+          if [[ -e "$product_source" || -L "$product_source" ]]; then
+            stage_tree "$product_source" \
+              "$bundle_work/pgw-e2e-product-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          fi
+          mv -- "$bundle_work" "$bundle"
+          [[ -d "$bundle" && ! -L "$bundle" ]]
+          [[ -z "$(find -P "$bundle" -xdev -mindepth 1 \
+            ! \( -type d -o -type f \) -printf '%f\n' -quit)" ]]
+
+      - name: Upload namespace evidence
+        if: ${{ always() && steps.prepare_upload.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: network-e2e-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/pgw-netns-evidence/
-            ${{ runner.temp }}/pgw-e2e-product-${{ github.run_id }}-${{ github.run_attempt }}/
+          path: ${{ runner.temp }}/pgw-netns-upload-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: error
           retention-days: 14
