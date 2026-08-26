@@ -187,8 +187,10 @@ make_fixture() {
         >"${system}/etc/pgw/ui_proxy_token"
     printf '%s\n' '$argon2id$v=19$m=65536,t=3,p=2$Zml4dHVyZXNhbHQ$Zml4dHVyZWhhc2hmaXh0dXJlaGFzaA' \
         >"${system}/etc/pgw/admin_pass_hash"
+    printf 'PGW_ADMIN_USER=fixture-admin\n' >"${system}/etc/pgw/pgw.env"
     chmod 0600 "${system}/etc/pgw/ui.crt" "${system}/etc/pgw/ui.key" \
         "${system}/etc/pgw/ui_proxy_token" "${system}/etc/pgw/admin_pass_hash"
+    chmod 0640 "${system}/etc/pgw/pgw.env"
     printf '0123456789abcdef0123456789abcdef' >"${system}/etc/pgw/snapshot.hmac"
     printf '0123456789abcdef0123456789abcdef' >"${system}/etc/pgw/snapshot-encryption.key"
     printf 'key.fixture\n' >"${system}/etc/pgw/snapshot-encryption.key.id"
