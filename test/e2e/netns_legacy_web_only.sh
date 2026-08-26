@@ -623,21 +623,14 @@ probe_udp_capture() {
     return 73
 }
 
-publish_product_artifacts() {
-    local rendered_sha256 rules_file="$1" base_rules_file="$2" dynamic_rules_file="$3"
-
-    install -m 0600 "${rules_file}" "${artifact_dir}/product-rendered-ruleset.nft"
-    install -m 0600 "${base_rules_file}" "${artifact_dir}/product-base-ruleset.nft"
-    install -m 0600 "${dynamic_rules_file}" "${artifact_dir}/product-dynamic-ruleset.nft"
-    (
-        cd -- "${artifact_dir}"
-        sha256sum product-rendered-ruleset.nft >product-rendered-ruleset.sha256
-    )
-    read -r rendered_sha256 _ <"${artifact_dir}/product-rendered-ruleset.sha256"
+write_product_manifest() {
+    local evidence_state="$1"
+    local rendered_sha256="$2"
 
     {
         printf 'format=%s\n' "${EVIDENCE_FORMAT}"
         printf 'evidence_contract=%s\n' "${EVIDENCE_CONTRACT}"
+        printf 'evidence_state=%s\n' "${evidence_state}"
         printf 'renderer=pkg/nft.RenderBase+RenderDynamic\n'
         printf 'counter_mode=required\n'
         printf 'rendered_sha256=%s\n' "${rendered_sha256}"
@@ -691,6 +684,20 @@ publish_product_artifacts() {
     } >"${artifact_dir}/product-manifest.txt"
 }
 
+publish_product_artifacts() {
+    local rendered_sha256 rules_file="$1" base_rules_file="$2" dynamic_rules_file="$3"
+
+    install -m 0600 "${rules_file}" "${artifact_dir}/product-rendered-ruleset.nft"
+    install -m 0600 "${base_rules_file}" "${artifact_dir}/product-base-ruleset.nft"
+    install -m 0600 "${dynamic_rules_file}" "${artifact_dir}/product-dynamic-ruleset.nft"
+    (
+        cd -- "${artifact_dir}"
+        sha256sum product-rendered-ruleset.nft >product-rendered-ruleset.sha256
+    )
+    read -r rendered_sha256 _ <"${artifact_dir}/product-rendered-ruleset.sha256"
+    write_product_manifest complete "${rendered_sha256}"
+}
+
 [[ "$(uname -s)" == "Linux" ]] || fail "network namespace lab requires Linux"
 [[ "${EUID}" -eq 0 ]] || fail "network namespace lab requires root"
 [[ "${NAMESPACE_PREFIX}" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "invalid PGW_E2E_PREFIX"
@@ -742,6 +749,7 @@ probe_log="${artifact_dir}/product-probes.log"
 trap cleanup EXIT
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
+write_product_manifest pending unavailable
 
 assert_resources_absent
 register_resource netns "${CLIENT_NS}"
