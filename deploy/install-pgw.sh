@@ -708,7 +708,13 @@ preflight_legacy_state() {
     [[ -f "${state}" && ! -L "${state}" ]] || die "legacy state path is unsafe"
     ((allow_legacy)) || die "legacy state.json detected; rerun with --migrate-legacy after reviewing the migration backup"
     api_binary="$(release_file artifacts/pgw-api)"
-    [[ -x "${api_binary}" && ! -L "${api_binary}" ]] || die "staged pgw-api migration binary is unavailable"
+    [[ -x "${api_binary}" ]] || die "staged pgw-api migration binary is unavailable"
+    # In a trusted launch, release_file returns a verified inherited descriptor
+    # at /proc/self/fd/N; procfs represents every such descriptor as a
+    # symlink. Ordinary filesystem paths must remain non-symlinks.
+    if [[ "${api_binary}" != /proc/self/fd/* && -L "${api_binary}" ]]; then
+        die "staged pgw-api migration binary is unavailable"
+    fi
     # This runs against an ephemeral SQLite store and cannot create a host
     # database or read the master key before rollback capture.
     report="$("${api_binary}" import-legacy-state --file "${state}" --dry-run)" \
