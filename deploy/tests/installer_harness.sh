@@ -340,6 +340,8 @@ if [[ "${boundary}" == success_rollback ]]; then
         || die "legacy UI credentials were not atomically transitioned"
     grep -Fxq 'PGW_LAN_ADDRESS=192.0.2.10' "$(host_path /etc/pgw/pgw.env)" \
         || die "production config phase did not publish fixture LAN address"
+    grep -Fxq 'PGW_ADMIN_USER=fixture-admin' "$(host_path /etc/pgw/pgw.env)" \
+        || die "production config phase did not preserve the legacy admin username"
     [[ "$(sqlite3 "$(host_path /var/lib/pgw/pgw.db)" 'PRAGMA integrity_check;')" == ok ]] \
         || die "fixture SQLite integrity adapter failed"
     printf 'database_migration\tservice_start_adapter\tnot_full_system\n' \

@@ -1580,9 +1580,28 @@ publish_ui_credential_generation() {
     fi
 }
 
+resolve_admin_user() {
+    local pgw_config_root="$1" existing_env expected_uid=0
+    local -a admin_users=()
+    ((installer_sourced)) && expected_uid="${EUID}"
+    existing_env="${pgw_config_root}/pgw.env"
+    if [[ ! -e "${existing_env}" && ! -L "${existing_env}" ]]; then
+        printf '%s\n' admin
+        return
+    fi
+    [[ -f "${existing_env}" && ! -L "${existing_env}" && \
+       "$(stat -c '%u:%a:%F' "${existing_env}")" == "${expected_uid}:640:regular file" ]] \
+        || die "existing PGW configuration is unsafe"
+    mapfile -t admin_users < <(sed -n -E \
+        's/^PGW_ADMIN_USER=([A-Za-z0-9][A-Za-z0-9._@-]{0,127})$/\1/p' "${existing_env}")
+    [[ "${#admin_users[@]}" == 1 ]] \
+        || die "existing PGW configuration must contain exactly one valid PGW_ADMIN_USER"
+    printf '%s\n' "${admin_users[0]}"
+}
+
 install_config_and_credentials() {
     local pgw_config_root env_stage password_file=/etc/pgw/credential-inbox/admin_password
-    local jwt_secret agent_token secrets_key admin_pass_hash
+    local jwt_secret agent_token secrets_key admin_pass_hash admin_user
     pgw_config_root="$(host_path /etc/pgw)"
     ((installer_sourced)) && password_file="$(host_path "${password_file}")"
     jwt_secret="${pgw_config_root}/jwt_secret"
@@ -1591,6 +1610,7 @@ install_config_and_credentials() {
     admin_pass_hash="${pgw_config_root}/admin_pass_hash"
     install -d -o root -g pgw-config -m 0750 "${pgw_config_root}"
     [[ -n "${lan_address}" ]] || die "LAN management address was not resolved"
+    admin_user="$(resolve_admin_user "${pgw_config_root}")"
     env_stage="$(mktemp "${pgw_config_root}/.pgw.env.XXXXXXXX")"
     cat >"${env_stage}" <<EOF
 PGW_API_ADDR=127.0.0.1:8080
@@ -1600,6 +1620,7 @@ PGW_IPV6_POLICY=deny
 PGW_WAN_IFACE=${wan_interface}
 PGW_LAN_IFACE=${lan_interface}
 PGW_LAN_ADDRESS=${lan_address}
+PGW_ADMIN_USER=${admin_user}
 PGW_MANAGEMENT_TCP_PORTS=${management_ports}
 PGW_UI_ADDR=${lan_address}:8081
 PGW_UI_API=http://127.0.0.1:8080
