@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 0077
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
@@ -24,6 +25,8 @@ capture_pids=()
 created_namespaces=()
 created_host_interfaces=()
 artifact_dir=""
+artifact_owner_gid=""
+artifact_owner_uid=""
 probe_log=""
 resource_manifest=""
 tmp_dir=""
@@ -120,17 +123,38 @@ capture_product_state() {
     printf 'state_capture=%s\n' "${phase}" >>"${probe_log}"
 }
 
-publish_artifact_permissions() {
-    [[ -n "${artifact_dir}" && -d "${artifact_dir}" ]] || return 0
+validate_artifact_tree_entries() {
+    local unexpected_entry=""
 
-    chmod 0755 -- "${artifact_dir}" || return 1
-    find "${artifact_dir}" -xdev -type d -exec chmod 0755 -- {} + || return 1
-    find "${artifact_dir}" -xdev -type f -exec chmod 0644 -- {} + || return 1
+    [[ -n "${artifact_dir}" && -d "${artifact_dir}" && ! -L "${artifact_dir}" ]] || return 1
+
+    if ! unexpected_entry="$(find -P "${artifact_dir}" -xdev -mindepth 1 \
+        ! \( -type d -o -type f \) -printf '%p\n' -quit)"; then
+        return 1
+    fi
+    [[ -z "${unexpected_entry}" ]] || return 1
+}
+
+publish_artifact_permissions() {
+    [[ -n "${artifact_dir}" ]] || return 0
+    [[ -e "${artifact_dir}" || -L "${artifact_dir}" ]] || return 0
+    validate_artifact_tree_entries || return 1
+    [[ "${artifact_owner_uid}" =~ ^[0-9]+$ && "${artifact_owner_gid}" =~ ^[0-9]+$ ]] || return 1
+
+    find -P "${artifact_dir}" -xdev -type d \
+        -exec chown -- "${artifact_owner_uid}:${artifact_owner_gid}" {} + || return 1
+    find -P "${artifact_dir}" -xdev -type f \
+        -exec chown -- "${artifact_owner_uid}:${artifact_owner_gid}" {} + || return 1
+    find -P "${artifact_dir}" -xdev -type d -exec chmod -- 0750 {} + || return 1
+    find -P "${artifact_dir}" -xdev -type f -exec chmod -- 0640 {} + || return 1
+
+    validate_artifact_tree_entries || return 1
 }
 
 cleanup() {
     local original_rc=$?
     local cleanup_rc=0
+    local artifact_publish_rc=0
     local capture_status final_rc interface_name namespace pid
     local -a cleanup_capture_pids=("${capture_pids[@]}")
 
@@ -218,9 +242,16 @@ cleanup() {
     if ! publish_artifact_permissions; then
         printf 'failed to publish runner-readable product artifacts\n' >&2
         cleanup_rc=1
+        artifact_publish_rc=1
     fi
-    if [[ -n "${probe_log}" && -f "${probe_log}" ]]; then
-        printf 'cleanup_rc=%d\n' "${cleanup_rc}" >>"${probe_log}"
+    if [[ "${artifact_publish_rc}" -eq 0 && -e "${artifact_dir}" ]]; then
+        if validate_artifact_tree_entries && \
+            [[ -n "${probe_log}" && -f "${probe_log}" && ! -L "${probe_log}" ]]; then
+            printf 'cleanup_rc=%d\n' "${cleanup_rc}" >>"${probe_log}"
+        else
+            printf 'refusing to append cleanup status to unsafe product artifact tree\n' >&2
+            cleanup_rc=1
+        fi
     fi
 
     final_rc="${original_rc}"
@@ -641,7 +672,7 @@ publish_product_artifacts() {
 [[ "${PGW_E2E_REQUIRE_BASE_KILL_SWITCH:-1}" == "1" ]] || \
     fail "Wave 1 E2E requires PGW_E2E_REQUIRE_BASE_KILL_SWITCH=1"
 
-for command_name in ip nft ss python3 curl tcpdump sysctl install sha256sum awk grep find chmod mktemp mv rm cmp; do
+for command_name in ip nft ss python3 curl tcpdump sysctl install sha256sum awk grep find stat chown chmod mktemp mv rm cmp; do
     require_command "${command_name}"
 done
 if [[ -n "${PGW_E2E_RENDER_FIXTURE:-}" ]]; then
@@ -661,7 +692,23 @@ resource_manifest="${PGW_E2E_RESOURCE_MANIFEST:-}"
 if [[ -n "${resource_manifest}" && "${NAMESPACE_PREFIX}" != *"${RESOURCE_TOKEN}"* ]]; then
     fail "PGW_E2E_PREFIX must contain PGW_E2E_RUN_TOKEN when a resource manifest is used"
 fi
-install -d -m 0755 "${artifact_dir}"
+if [[ -L "${artifact_dir}" ]]; then
+    fail "PGW_E2E_ARTIFACT_DIR must not be a symbolic link"
+fi
+if [[ -e "${artifact_dir}" ]]; then
+    [[ -d "${artifact_dir}" ]] || fail "PGW_E2E_ARTIFACT_DIR must be a directory"
+else
+    install -d -m 0700 "${artifact_dir}"
+fi
+[[ -d "${artifact_dir}" && ! -L "${artifact_dir}" ]] || \
+    fail "PGW_E2E_ARTIFACT_DIR is not a link-free directory"
+artifact_owner_uid="$(stat -c '%u' -- "${artifact_dir}")"
+artifact_owner_gid="$(stat -c '%g' -- "${artifact_dir}")"
+[[ "${artifact_owner_uid}" =~ ^[0-9]+$ && "${artifact_owner_gid}" =~ ^[0-9]+$ ]] || \
+    fail "could not determine PGW_E2E_ARTIFACT_DIR owner"
+validate_artifact_tree_entries || fail "PGW_E2E_ARTIFACT_DIR contains an unsupported entry"
+chmod -- 0700 "${artifact_dir}"
+validate_artifact_tree_entries || fail "PGW_E2E_ARTIFACT_DIR contains an unsupported entry"
 probe_log="${artifact_dir}/product-probes.log"
 : >"${probe_log}"
 trap cleanup EXIT
