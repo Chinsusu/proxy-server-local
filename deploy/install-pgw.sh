@@ -1835,8 +1835,13 @@ verify_installation() {
 verify_ui_http_smoke() {
     local ui_host index_body asset certificate
     certificate="$(host_path /etc/pgw/credentials-current/ui.crt)"
-    ui_host="$(openssl x509 -in "${certificate}" -noout -ext subjectAltName 2>/dev/null | sed -n 's/.*DNS:\([^, ]*\).*/\1/p' | head -n1)"
-    [[ -n "${ui_host}" ]] || ui_host="$(openssl x509 -in "${certificate}" -noout -ext subjectAltName 2>/dev/null | sed -n 's/.*IP Address:\([^, ]*\).*/\1/p' | head -n1)"
+    # head -n1 can close its input before sed/openssl finish writing a
+    # multi-SAN certificate's remaining matches, delivering SIGPIPE upstream;
+    # under pipefail that would abort the script even though ui_host was
+    # captured correctly. The `|| true` absorbs that exit status - the
+    # emptiness checks below already handle a genuinely absent match.
+    ui_host="$(openssl x509 -in "${certificate}" -noout -ext subjectAltName 2>/dev/null | sed -n 's/.*DNS:\([^, ]*\).*/\1/p' | head -n1)" || true
+    [[ -n "${ui_host}" ]] || ui_host="$(openssl x509 -in "${certificate}" -noout -ext subjectAltName 2>/dev/null | sed -n 's/.*IP Address:\([^, ]*\).*/\1/p' | head -n1)" || true
     [[ -n "${ui_host}" ]] || ui_host="$(openssl x509 -in "${certificate}" -noout -subject -nameopt RFC2253 | sed -n 's/.*CN=\([^,]*\).*/\1/p')"
     [[ -n "${ui_host}" ]] || die "UI certificate has no DNS identity for smoke validation"
     index_body="$(curl --fail --silent --show-error --cacert "${certificate}" --resolve "${ui_host}:8081:${lan_address}" "https://${ui_host}:8081/login")"
