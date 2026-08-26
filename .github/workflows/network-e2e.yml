@@ -91,6 +91,7 @@ jobs:
           sudo /bin/bash test/e2e/ipv6_management_oracle_test.sh
 
       - name: Run isolated namespace harness
+        id: run_harness
         env:
           REQUIRE_HARNESS: ${{ inputs.require_harness || false }}
         shell: bash
@@ -108,8 +109,6 @@ jobs:
           veth_gateway="pg${run_token}"
           resource_manifest="$evidence/resources-${run_token}.tsv"
           product_artifacts="$RUNNER_TEMP/.pgw-e2e-product-source-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          staged_product_artifacts="$RUNNER_TEMP/.pgw-e2e-product-package-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          product_stage_work="$RUNNER_TEMP/.pgw-e2e-product-staging-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           harness=""
           if [[ -f "test/e2e/netns_legacy_web_only.sh" ]]; then
             harness="test/e2e/netns_legacy_web_only.sh"
@@ -340,6 +339,143 @@ jobs:
               }
               seen_product_artifacts["$artifact_name"]=1
             done
+            audit_product_package() {
+              local package="$1"
+              local digest_extra digest_hash digest_name entry file_count=0 key
+              local name package_gid package_mode package_uid source_file_count=0
+              local status_file status_gid status_mode status_uid status_links value
+              local -a required_status_keys=(
+                package_contract
+                validation
+                harness_exit
+                semantic_validation
+                allowlist_contract
+                source_manifest_file
+                source_manifest_presence
+                packaged_source_files
+                digest_file
+                digest_scope
+                run_id
+                run_attempt
+                run_token
+              )
+              local -A allowed_package_files=()
+              local -A allowed_status_keys=()
+              local -A digest_seen=()
+              local -A package_status=()
+
+              [[ -d "$package" && ! -L "$package" ]] || return 1
+              IFS=: read -r package_uid package_gid package_mode < <(
+                stat -c '%u:%g:%a' -- "$package"
+              )
+              [[ "$package_uid" == "$(id -u)" && "$package_gid" == "$(id -g)" && \
+                  "$package_mode" == "700" ]] || return 1
+              [[ -z "$(find -P "$package" -xdev -mindepth 2 -print -quit)" ]] || return 1
+              [[ -z "$(find -P "$package" -xdev -mindepth 1 -maxdepth 1 \
+                ! -type f -print -quit)" ]] || return 1
+
+              for name in "${product_allowlist[@]}" \
+                product-evidence-status.txt product-evidence-sha256.txt; do
+                allowed_package_files["$name"]=1
+              done
+              while IFS= read -r -d '' entry; do
+                name="${entry##*/}"
+                [[ -v "allowed_package_files[$name]" ]] || return 1
+                IFS=: read -r status_uid status_gid status_mode status_links < <(
+                  stat -c '%u:%g:%a:%h' -- "$entry"
+                )
+                [[ "$status_uid" == "$(id -u)" && "$status_gid" == "$(id -g)" && \
+                    "$status_mode" == "600" && "$status_links" == "1" ]] || return 1
+                ((file_count += 1))
+                if [[ "$name" != "product-evidence-status.txt" && \
+                    "$name" != "product-evidence-sha256.txt" ]]; then
+                  ((source_file_count += 1))
+                fi
+              done < <(find -P "$package" -xdev -mindepth 1 -maxdepth 1 \
+                -type f -print0)
+
+              status_file="$package/product-evidence-status.txt"
+              [[ -f "$status_file" && ! -L "$status_file" ]] || return 1
+              for key in "${required_status_keys[@]}"; do
+                allowed_status_keys["$key"]=1
+              done
+              while IFS='=' read -r key value; do
+                [[ "$key" =~ ^[a-z][a-z0-9_]*$ && -n "$value" && \
+                    -v "allowed_status_keys[$key]" && \
+                    ! -v "package_status[$key]" ]] || return 1
+                package_status["$key"]="$value"
+              done < "$status_file"
+              for key in "${required_status_keys[@]}"; do
+                [[ -n "${package_status[$key]:-}" ]] || return 1
+              done
+              [[ "${package_status[package_contract]}" == \
+                  "pgw-product-evidence-package-v1" ]] || return 1
+              [[ "${package_status[allowlist_contract]}" == \
+                  "pgw-product-evidence-v1" ]] || return 1
+              [[ "${package_status[source_manifest_file]}" == "product-manifest.txt" && \
+                  "${package_status[digest_file]}" == "product-evidence-sha256.txt" && \
+                  "${package_status[digest_scope]}" == \
+                    "all_files_except_digest_manifest" ]] || return 1
+              [[ "${package_status[run_id]}" == "$GITHUB_RUN_ID" && \
+                  "${package_status[run_attempt]}" == "$GITHUB_RUN_ATTEMPT" && \
+                  "${package_status[run_token]}" == "$run_token" ]] || return 1
+              [[ "${package_status[harness_exit]}" =~ ^[0-9]+$ && \
+                  "${package_status[packaged_source_files]}" =~ ^[0-9]+$ && \
+                  "${package_status[packaged_source_files]}" == "$source_file_count" ]] || \
+                return 1
+              case "${package_status[source_manifest_presence]}" in
+                present)
+                  [[ -f "$package/product-manifest.txt" ]] || return 1
+                  ;;
+                missing)
+                  [[ ! -e "$package/product-manifest.txt" && \
+                      ! -L "$package/product-manifest.txt" ]] || return 1
+                  ;;
+                *)
+                  return 1
+                  ;;
+              esac
+              case "${package_status[validation]}" in
+                VALIDATED)
+                  [[ "${package_status[harness_exit]}" == "0" && \
+                      "${package_status[semantic_validation]}" == "PASS" && \
+                      "${package_status[source_manifest_presence]}" == "present" ]] || \
+                    return 1
+                  [[ -f "$package/product-manifest.txt" ]] || return 1
+                  for key in "${artifact_keys[@]}"; do
+                    [[ -f "$package/${expected_artifact_names[$key]}" ]] || return 1
+                  done
+                  ;;
+                UNVALIDATED_FAILURE)
+                  [[ "${package_status[semantic_validation]}" != "PASS" ]] || return 1
+                  ;;
+                *)
+                  return 1
+                  ;;
+              esac
+
+              [[ -f "$package/product-evidence-sha256.txt" && \
+                  ! -L "$package/product-evidence-sha256.txt" ]] || return 1
+              while read -r digest_hash digest_name digest_extra; do
+                [[ "$digest_hash" =~ ^[0-9a-f]{64}$ && -n "$digest_name" && \
+                    -z "$digest_extra" && \
+                    "$digest_name" == "$(basename -- "$digest_name")" && \
+                    "$digest_name" != "product-evidence-sha256.txt" && \
+                    -v "allowed_package_files[$digest_name]" && \
+                    -f "$package/$digest_name" && ! -L "$package/$digest_name" && \
+                    ! -v "digest_seen[$digest_name]" ]] || return 1
+                digest_seen["$digest_name"]=1
+              done < "$package/product-evidence-sha256.txt"
+              while IFS= read -r -d '' entry; do
+                name="${entry##*/}"
+                [[ "$name" == "product-evidence-sha256.txt" || \
+                    -v "digest_seen[$name]" ]] || return 1
+              done < <(find -P "$package" -xdev -mindepth 1 -maxdepth 1 \
+                -type f -print0)
+              [[ "${#digest_seen[@]}" -eq $((file_count - 1)) ]] || return 1
+              (cd "$package" && sha256sum --check --strict --status \
+                product-evidence-sha256.txt)
+            }
             echo "product_evidence_contract=pgw-product-evidence-v1" \
               >> "$evidence/summary.txt"
             set +e
@@ -643,72 +779,65 @@ jobs:
               package_status="UNVALIDATED_FAILURE"
               [[ "$semantic_status" == "PASS" && "$harness_rc" -eq 0 ]] && \
                 package_status="VALIDATED"
-              if [[ -e "$product_stage_work" || -L "$product_stage_work" || \
-                  -e "$staged_product_artifacts" || -L "$staged_product_artifacts" ]]; then
-                echo "product_evidence_staging=FAILED:path_already_exists" \
-                  >> "$evidence/summary.txt"
-                harness_rc=1
-              else
-                install -d -m 0700 "$product_stage_work"
-                staged_names=()
-                staging_safe=1
-                for artifact_name in "${product_allowlist[@]}"; do
-                  artifact_file="$product_artifacts/$artifact_name"
-                  if [[ -e "$artifact_file" || -L "$artifact_file" ]]; then
-                    if [[ ! -f "$artifact_file" || -L "$artifact_file" || \
-                        ! -r "$artifact_file" ]]; then
-                      echo "product_evidence_staging=FAILED:unsafe_allowlisted_file:$artifact_name" \
-                        >> "$evidence/summary.txt"
-                      harness_rc=1
-                      staging_safe=0
-                      break
-                    fi
-                    install -m 0600 -- "$artifact_file" \
-                      "$product_stage_work/$artifact_name"
-                    staged_names+=("$artifact_name")
-                  fi
-                done
-                if [[ "$staging_safe" -eq 1 ]]; then
-                  manifest_presence="missing"
-                  [[ -f "$product_stage_work/product-manifest.txt" ]] && \
-                    manifest_presence="present"
-                  {
-                    echo "package_contract=pgw-product-evidence-package-v1"
-                    echo "validation=$package_status"
-                    echo "harness_exit=$harness_exit_rc"
-                    echo "semantic_validation=$semantic_status"
-                    echo "allowlist_contract=pgw-product-evidence-v1"
-                    echo "source_manifest_file=product-manifest.txt"
-                    echo "source_manifest_presence=$manifest_presence"
-                    echo "packaged_source_files=${#staged_names[@]}"
-                    echo "digest_file=product-evidence-sha256.txt"
-                  } > "$product_stage_work/product-evidence-status.txt"
-                  chmod 0600 "$product_stage_work/product-evidence-status.txt"
-                  staged_names+=(product-evidence-status.txt)
-                  : > "$product_stage_work/product-evidence-sha256.txt"
-                  for staged_name in "${staged_names[@]}"; do
-                    (cd "$product_stage_work" && sha256sum -- "$staged_name") \
-                      >> "$product_stage_work/product-evidence-sha256.txt"
-                  done
-                  chmod 0600 "$product_stage_work/product-evidence-sha256.txt"
-                  staged_unexpected="$(find -P "$product_stage_work" -xdev -mindepth 1 \
-                    ! -type f -printf '%f\n' -quit)"
-                  if [[ -n "$staged_unexpected" ]]; then
-                    echo "product_evidence_staging=FAILED:unsupported_entry:$staged_unexpected" \
+              product_stage_work="$(mktemp -d \
+                "$RUNNER_TEMP/.pgw-e2e-product-package.XXXXXXXXXX")"
+              chmod 0700 "$product_stage_work"
+              staged_names=()
+              staging_safe=1
+              for artifact_name in "${product_allowlist[@]}"; do
+                artifact_file="$product_artifacts/$artifact_name"
+                if [[ -e "$artifact_file" || -L "$artifact_file" ]]; then
+                  if [[ ! -f "$artifact_file" || -L "$artifact_file" || \
+                      ! -r "$artifact_file" ]]; then
+                    echo "product_evidence_staging=FAILED:unsafe_allowlisted_file:$artifact_name" \
                       >> "$evidence/summary.txt"
                     harness_rc=1
-                  else
-                    mv -- "$product_stage_work" "$staged_product_artifacts"
-                    if [[ -d "$staged_product_artifacts" && \
-                        ! -L "$staged_product_artifacts" ]]; then
-                      echo "product_evidence_staging=PASS:$package_status" \
-                        >> "$evidence/summary.txt"
-                    else
-                      echo "product_evidence_staging=FAILED:invalid_staging_root" \
-                        >> "$evidence/summary.txt"
-                      harness_rc=1
-                    fi
+                    staging_safe=0
+                    break
                   fi
+                  install -m 0600 -- "$artifact_file" \
+                    "$product_stage_work/$artifact_name"
+                  staged_names+=("$artifact_name")
+                fi
+              done
+              if [[ "$staging_safe" -eq 1 ]]; then
+                manifest_presence="missing"
+                [[ -f "$product_stage_work/product-manifest.txt" ]] && \
+                  manifest_presence="present"
+                {
+                  echo "package_contract=pgw-product-evidence-package-v1"
+                  echo "validation=$package_status"
+                  echo "harness_exit=$harness_exit_rc"
+                  echo "semantic_validation=$semantic_status"
+                  echo "allowlist_contract=pgw-product-evidence-v1"
+                  echo "source_manifest_file=product-manifest.txt"
+                  echo "source_manifest_presence=$manifest_presence"
+                  echo "packaged_source_files=${#staged_names[@]}"
+                  echo "digest_file=product-evidence-sha256.txt"
+                  echo "digest_scope=all_files_except_digest_manifest"
+                  echo "run_id=$GITHUB_RUN_ID"
+                  echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+                  echo "run_token=$run_token"
+                } > "$product_stage_work/product-evidence-status.txt"
+                chmod 0600 "$product_stage_work/product-evidence-status.txt"
+                staged_names+=(product-evidence-status.txt)
+                : > "$product_stage_work/product-evidence-sha256.txt"
+                for staged_name in "${staged_names[@]}"; do
+                  (cd "$product_stage_work" && sha256sum -- "$staged_name") \
+                    >> "$product_stage_work/product-evidence-sha256.txt"
+                done
+                chmod 0600 "$product_stage_work/product-evidence-sha256.txt"
+                if audit_product_package "$product_stage_work"; then
+                  {
+                    echo "product_package_ready=true"
+                    echo "product_package_path=$product_stage_work"
+                  } >> "$GITHUB_OUTPUT"
+                  echo "product_evidence_staging=PASS:$package_status" \
+                    >> "$evidence/summary.txt"
+                else
+                  echo "product_evidence_staging=FAILED:package_audit" \
+                    >> "$evidence/summary.txt"
+                  harness_rc=1
                 fi
               fi
             else
@@ -728,15 +857,216 @@ jobs:
       - name: Prepare link-free evidence bundle
         id: prepare_upload
         if: ${{ always() }}
+        env:
+          PRODUCT_PACKAGE_READY: ${{ steps.run_harness.outputs.product_package_ready }}
+          PRODUCT_PACKAGE_PATH: ${{ steps.run_harness.outputs.product_package_path }}
         shell: bash
         run: |
           set -Eeuo pipefail
           umask 0077
 
           evidence_source="$RUNNER_TEMP/pgw-netns-evidence"
-          product_source="$RUNNER_TEMP/.pgw-e2e-product-package-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          bundle_work="$RUNNER_TEMP/.pgw-netns-upload-staging-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          bundle="$RUNNER_TEMP/pgw-netns-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          product_destination="pgw-e2e-product-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          run_token="$(printf '%s' "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            | sha256sum | cut -c1-10)"
+          product_source_allowlist=(
+            product-manifest.txt
+            product-rendered-ruleset.nft
+            product-base-ruleset.nft
+            product-dynamic-ruleset.nft
+            product-rendered-ruleset.sha256
+            product-applied-ruleset.json
+            product-applied-ruleset.txt
+            product-counters.json
+            product-probes.log
+            product-valid-dynamic-replacement.nft
+            product-dynamic-before-invalid.json
+            product-dynamic-after-invalid.json
+            product-invalid-dynamic-candidate.nft
+            product-invalid-dynamic.stdout.log
+            product-invalid-dynamic.stderr.log
+            product-base-after-invalid.json
+            gateway-http.log
+            gateway-http-restarted.log
+            gateway-dns-tcp.log
+            gateway-management.log
+            gateway-management-ipv6.log
+            wan-direct-sentinel.log
+            wan-http.log
+            wan-http6.log
+            udp-control-before-rules.log
+            udp-blocked-client.log
+            udp-control-after-rules.log
+            startup-readiness-diagnostics.txt
+            readiness-mapped-ipv4.curl.log
+            readiness-unmapped-ipv4.curl.log
+            readiness-ipv6.curl.log
+            readiness-management-ipv6.curl.log
+            readiness-direct-sentinel.curl.log
+            product-counters.capture-error.txt
+          )
+          required_success_files=(
+            product-manifest.txt
+            product-rendered-ruleset.nft
+            product-base-ruleset.nft
+            product-dynamic-ruleset.nft
+            product-rendered-ruleset.sha256
+            product-applied-ruleset.json
+            product-applied-ruleset.txt
+            product-counters.json
+            product-probes.log
+            product-valid-dynamic-replacement.nft
+            product-dynamic-before-invalid.json
+            product-dynamic-after-invalid.json
+            product-invalid-dynamic-candidate.nft
+            product-invalid-dynamic.stdout.log
+            product-invalid-dynamic.stderr.log
+            product-base-after-invalid.json
+            gateway-http.log
+            gateway-http-restarted.log
+            gateway-dns-tcp.log
+            gateway-management.log
+            gateway-management-ipv6.log
+            wan-direct-sentinel.log
+            wan-http.log
+            wan-http6.log
+            udp-control-before-rules.log
+            udp-blocked-client.log
+            udp-control-after-rules.log
+          )
+
+          audit_product_package() {
+            local package="$1"
+            local digest_extra digest_hash digest_name entry file_count=0 key
+            local name package_gid package_mode package_uid source_file_count=0
+            local status_file status_gid status_mode status_uid status_links value
+            local -a required_status_keys=(
+              package_contract
+              validation
+              harness_exit
+              semantic_validation
+              allowlist_contract
+              source_manifest_file
+              source_manifest_presence
+              packaged_source_files
+              digest_file
+              digest_scope
+              run_id
+              run_attempt
+              run_token
+            )
+            local -A allowed_package_files=()
+            local -A allowed_status_keys=()
+            local -A digest_seen=()
+            local -A package_status=()
+
+            [[ -d "$package" && ! -L "$package" ]] || return 1
+            IFS=: read -r package_uid package_gid package_mode < <(
+              stat -c '%u:%g:%a' -- "$package"
+            )
+            [[ "$package_uid" == "$(id -u)" && "$package_gid" == "$(id -g)" && \
+                "$package_mode" == "700" ]] || return 1
+            [[ -z "$(find -P "$package" -xdev -mindepth 2 -print -quit)" ]] || return 1
+            [[ -z "$(find -P "$package" -xdev -mindepth 1 -maxdepth 1 \
+              ! -type f -print -quit)" ]] || return 1
+
+            for name in "${product_source_allowlist[@]}" \
+              product-evidence-status.txt product-evidence-sha256.txt; do
+              allowed_package_files["$name"]=1
+            done
+            while IFS= read -r -d '' entry; do
+              name="${entry##*/}"
+              [[ -v "allowed_package_files[$name]" ]] || return 1
+              IFS=: read -r status_uid status_gid status_mode status_links < <(
+                stat -c '%u:%g:%a:%h' -- "$entry"
+              )
+              [[ "$status_uid" == "$(id -u)" && "$status_gid" == "$(id -g)" && \
+                  "$status_mode" == "600" && "$status_links" == "1" ]] || return 1
+              ((file_count += 1))
+              if [[ "$name" != "product-evidence-status.txt" && \
+                  "$name" != "product-evidence-sha256.txt" ]]; then
+                ((source_file_count += 1))
+              fi
+            done < <(find -P "$package" -xdev -mindepth 1 -maxdepth 1 \
+              -type f -print0)
+
+            status_file="$package/product-evidence-status.txt"
+            [[ -f "$status_file" && ! -L "$status_file" ]] || return 1
+            for key in "${required_status_keys[@]}"; do
+              allowed_status_keys["$key"]=1
+            done
+            while IFS='=' read -r key value; do
+              [[ "$key" =~ ^[a-z][a-z0-9_]*$ && -n "$value" && \
+                  -v "allowed_status_keys[$key]" && \
+                  ! -v "package_status[$key]" ]] || return 1
+              package_status["$key"]="$value"
+            done < "$status_file"
+            for key in "${required_status_keys[@]}"; do
+              [[ -n "${package_status[$key]:-}" ]] || return 1
+            done
+            [[ "${package_status[package_contract]}" == \
+                "pgw-product-evidence-package-v1" && \
+                "${package_status[allowlist_contract]}" == \
+                  "pgw-product-evidence-v1" ]] || return 1
+            [[ "${package_status[source_manifest_file]}" == "product-manifest.txt" && \
+                "${package_status[digest_file]}" == "product-evidence-sha256.txt" && \
+                "${package_status[digest_scope]}" == \
+                  "all_files_except_digest_manifest" ]] || return 1
+            [[ "${package_status[run_id]}" == "$GITHUB_RUN_ID" && \
+                "${package_status[run_attempt]}" == "$GITHUB_RUN_ATTEMPT" && \
+                "${package_status[run_token]}" == "$run_token" ]] || return 1
+            [[ "${package_status[harness_exit]}" =~ ^[0-9]+$ && \
+                "${package_status[packaged_source_files]}" =~ ^[0-9]+$ && \
+                "${package_status[packaged_source_files]}" == "$source_file_count" ]] || \
+              return 1
+            case "${package_status[source_manifest_presence]}" in
+              present)
+                [[ -f "$package/product-manifest.txt" ]] || return 1
+                ;;
+              missing)
+                [[ ! -e "$package/product-manifest.txt" && \
+                    ! -L "$package/product-manifest.txt" ]] || return 1
+                ;;
+              *) return 1 ;;
+            esac
+            case "${package_status[validation]}" in
+              VALIDATED)
+                [[ "${package_status[harness_exit]}" == "0" && \
+                    "${package_status[semantic_validation]}" == "PASS" && \
+                    "${package_status[source_manifest_presence]}" == "present" ]] || \
+                  return 1
+                for name in "${required_success_files[@]}"; do
+                  [[ -f "$package/$name" ]] || return 1
+                done
+                ;;
+              UNVALIDATED_FAILURE)
+                [[ "${package_status[semantic_validation]}" != "PASS" ]] || return 1
+                ;;
+              *) return 1 ;;
+            esac
+
+            [[ -f "$package/product-evidence-sha256.txt" && \
+                ! -L "$package/product-evidence-sha256.txt" ]] || return 1
+            while read -r digest_hash digest_name digest_extra; do
+              [[ "$digest_hash" =~ ^[0-9a-f]{64}$ && -n "$digest_name" && \
+                  -z "$digest_extra" && \
+                  "$digest_name" == "$(basename -- "$digest_name")" && \
+                  "$digest_name" != "product-evidence-sha256.txt" && \
+                  -v "allowed_package_files[$digest_name]" && \
+                  -f "$package/$digest_name" && ! -L "$package/$digest_name" && \
+                  ! -v "digest_seen[$digest_name]" ]] || return 1
+              digest_seen["$digest_name"]=1
+            done < "$package/product-evidence-sha256.txt"
+            while IFS= read -r -d '' entry; do
+              name="${entry##*/}"
+              [[ "$name" == "product-evidence-sha256.txt" || \
+                  -v "digest_seen[$name]" ]] || return 1
+            done < <(find -P "$package" -xdev -mindepth 1 -maxdepth 1 \
+              -type f -print0)
+            [[ "${#digest_seen[@]}" -eq $((file_count - 1)) ]] || return 1
+            (cd "$package" && sha256sum --check --strict --status \
+              product-evidence-sha256.txt)
+          }
 
           stage_tree() {
             local source="$1"
@@ -770,27 +1100,78 @@ jobs:
             [[ -z "$unsupported_entry" ]]
           }
 
-          if [[ -e "$bundle_work" || -L "$bundle_work" || \
-              -e "$bundle" || -L "$bundle" ]]; then
-            echo "refusing pre-existing upload staging path" >&2
-            exit 1
+          audit_bundle() {
+            local bundle="$1"
+            local product_included="$2"
+            local entry entry_gid entry_links entry_mode entry_uid name
+            local -A allowed_top=(
+              [pgw-netns-evidence]=1
+            )
+
+            [[ -d "$bundle" && ! -L "$bundle" ]] || return 1
+            if [[ "$product_included" -eq 1 ]]; then
+              allowed_top["$product_destination"]=1
+            fi
+            while IFS= read -r -d '' entry; do
+              name="${entry##*/}"
+              [[ -v "allowed_top[$name]" ]] || return 1
+            done < <(find -P "$bundle" -xdev -mindepth 1 -maxdepth 1 -print0)
+            [[ -d "$bundle/pgw-netns-evidence" && \
+                ! -L "$bundle/pgw-netns-evidence" ]] || return 1
+            if [[ "$product_included" -eq 0 ]]; then
+              [[ ! -e "$bundle/$product_destination" && \
+                  ! -L "$bundle/$product_destination" ]] || return 1
+            fi
+            [[ -z "$(find -P "$bundle" -xdev -mindepth 1 \
+              ! \( -type d -o -type f \) -print -quit)" ]] || return 1
+            while IFS= read -r -d '' entry; do
+              IFS=: read -r entry_uid entry_gid entry_mode < <(
+                stat -c '%u:%g:%a' -- "$entry"
+              )
+              [[ "$entry_uid" == "$(id -u)" && "$entry_gid" == "$(id -g)" && \
+                  "$entry_mode" == "700" ]] || return 1
+            done < <(find -P "$bundle" -xdev -type d -print0)
+            while IFS= read -r -d '' entry; do
+              IFS=: read -r entry_uid entry_gid entry_mode entry_links < <(
+                stat -c '%u:%g:%a:%h' -- "$entry"
+              )
+              [[ "$entry_uid" == "$(id -u)" && "$entry_gid" == "$(id -g)" && \
+                  "$entry_mode" == "600" && "$entry_links" == "1" ]] || return 1
+            done < <(find -P "$bundle" -xdev -type f -print0)
+            if [[ "$product_included" -eq 1 ]]; then
+              audit_product_package "$bundle/$product_destination"
+            fi
+          }
+
+          bundle="$(mktemp -d "$RUNNER_TEMP/.pgw-netns-upload-bundle.XXXXXXXXXX")"
+          chmod 0700 "$bundle"
+          stage_tree "$evidence_source" "$bundle/pgw-netns-evidence"
+          product_included=0
+          if [[ "$PRODUCT_PACKAGE_READY" == "true" ]]; then
+            if audit_product_package "$PRODUCT_PACKAGE_PATH"; then
+              product_copy="$(mktemp -d \
+                "$RUNNER_TEMP/.pgw-e2e-product-copy.XXXXXXXXXX")"
+              chmod 0700 "$product_copy"
+              stage_tree "$PRODUCT_PACKAGE_PATH" "$product_copy"
+              audit_product_package "$product_copy"
+              mv -- "$product_copy" "$bundle/$product_destination"
+              product_included=1
+            else
+              echo "excluding product package that failed provenance audit" >&2
+            fi
           fi
-          install -d -m 0700 "$bundle_work"
-          stage_tree "$evidence_source" "$bundle_work/pgw-netns-evidence"
-          if [[ -e "$product_source" || -L "$product_source" ]]; then
-            stage_tree "$product_source" \
-              "$bundle_work/pgw-e2e-product-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          fi
-          mv -- "$bundle_work" "$bundle"
-          [[ -d "$bundle" && ! -L "$bundle" ]]
-          [[ -z "$(find -P "$bundle" -xdev -mindepth 1 \
-            ! \( -type d -o -type f \) -printf '%f\n' -quit)" ]]
+          audit_bundle "$bundle" "$product_included"
+          {
+            echo "bundle_ready=true"
+            echo "bundle_path=$bundle"
+            echo "product_package_included=$product_included"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload namespace evidence
-        if: ${{ always() && steps.prepare_upload.outcome == 'success' }}
+        if: ${{ always() && steps.prepare_upload.outputs.bundle_ready == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: network-e2e-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/pgw-netns-upload-${{ github.run_id }}-${{ github.run_attempt }}/
+          path: ${{ steps.prepare_upload.outputs.bundle_path }}
           if-no-files-found: error
           retention-days: 14
