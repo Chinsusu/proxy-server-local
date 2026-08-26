@@ -34,12 +34,14 @@ hỗ trợ.
 
 ## Cài đặt và cập nhật
 
-Production chỉ dùng release đã được pin ngoài checkout. Checkout không bao giờ
-được build hoặc thực thi với quyền root:
+Production dùng self-managed candidate đã được owner kiểm SHA-256. Không chạy
+checkout với quyền root; root chỉ chạy launcher nằm trong candidate đã stage:
 
 ```bash
-sudo /usr/local/sbin/pgw-release-launcher --dry-run
-sudo /usr/local/sbin/pgw-release-launcher
+sudo /opt/pgw/inbox/<release>/assembly/pgw-release-launcher \
+  --adopt /opt/pgw/inbox/<release>/assembly --dry-run
+sudo /opt/pgw/inbox/<release>/assembly/pgw-release-launcher \
+  --adopt /opt/pgw/inbox/<release>/assembly --migrate-legacy --lan ens19 --wan eth0
 ```
 
 Installer khóa toàn bộ lifecycle, dừng/drain service và Forwarder trước khi
@@ -55,7 +57,7 @@ binary hoặc DB thủ công. Xem
 - [Kiến trúc](docs/architecture.md)
 - [API](docs/api.md)
 - [Coding standard](docs/CODING_STANDARDS.md)
-- [Git workflow và review gate](docs/GIT_WORKFLOW.md)
+- [Git workflow](docs/GIT_WORKFLOW.md)
 - [CI](docs/CI.md)
 
 License: AGPL-3.0.

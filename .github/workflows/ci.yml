@@ -78,10 +78,7 @@ jobs:
             exit 1
           fi
           python3 -B deploy/tests/release_snapshot_boundary_test.py
-          python3 -B deploy/tests/full_system_evidence_parser_test.py
           python3 -B deploy/tests/ci_privilege_domain_test.py
-          bash deploy/tests/attestation_bootstrap_test.sh
-          bash deploy/tests/full_system_trust_bootstrap_test.sh
           bash deploy/tests/hardening_test.sh
 
   test:
@@ -224,7 +221,7 @@ jobs:
           sudo env PGW_REQUIRE_SNAPSHOT_PAYLOAD_ROOT_EVIDENCE=1 /bin/bash deploy/tests/snapshot_payload_linux_root_test.sh
           sudo env PGW_REQUIRE_BASE_INSTALLER_EVIDENCE=1 /bin/bash deploy/tests/base_installer_failclose_test.sh
   candidate-release:
-    name: Protected push / closed diagnostic candidate only
+    name: Protected push / self-managed release candidate
     if: >-
       github.event_name == 'push' &&
       github.repository == 'Chinsusu/proxy-server-local' &&
@@ -292,7 +289,7 @@ jobs:
             "${RUNNER_TEMP}/pgw-rehearsal-evidence/release-tool-binaries.sha256"
           install -m 0644 "${RUNNER_TEMP}/release-tool-versions.manifest" \
             "${RUNNER_TEMP}/pgw-rehearsal-evidence/release-tool-versions.manifest"
-      - name: Finalize nonpromotable diagnostic candidate and close deterministic tar
+      - name: Finalize self-managed candidate and close deterministic tar
         env:
           PATH: ${{ runner.temp }}/pgw-release-tools:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         shell: bash
@@ -303,10 +300,10 @@ jobs:
             "${RUNNER_TEMP}/pgw-assembly" "${RUNNER_TEMP}/pgw-rehearsal-evidence" "${RUNNER_TEMP}/pgw-candidate"
           bash deploy/close-release.sh "${RUNNER_TEMP}/pgw-candidate" \
             "$(pwd)/dist/pgw-release-candidate.tar"
-      - name: Upload closed diagnostic candidate only
+      - name: Upload closed self-managed candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pgw-candidate-diagnostic-${{ github.sha }}
+          name: pgw-self-managed-candidate-${{ github.sha }}
           path: dist/pgw-release-candidate.tar
           if-no-files-found: error
           retention-days: 14

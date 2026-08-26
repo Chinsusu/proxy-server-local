@@ -51,16 +51,17 @@ affected states. Firewall, forwarding, mapping, proxy, or routing changes must
 include fail-close evidence and a rollback procedure as described in the Git
 workflow.
 
-## Pull request minimum
+## Change submission
 
-A pull request must:
+When using a pull request, include:
 
 1. Link an issue or explain why no issue is needed.
 2. State behavior before and after the change.
 3. Identify compatibility, security, migration, and operational impact.
 4. Include tests and evidence proportional to risk.
 5. Keep secrets and sensitive traffic data out of logs and attachments.
-6. Pass all required CI checks and required reviews before merge.
+6. Pass all required CI checks before merge. External review is optional for a
+   self-managed project and may be used when collaborators are available.
 
-Use the repository pull request template; do not delete sections that appear
-not applicable—mark them `N/A` with a short reason.
+Use the repository pull request template when it is helpful; a maintainer may
+merge a direct change after recording the same scope, tests, and rollback facts.

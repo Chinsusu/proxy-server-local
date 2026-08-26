@@ -42,16 +42,17 @@ release blockers.
 
 ## Install, migration, and rollback
 
-Repository scripts are non-root development/rehearsal helpers only. Run the
-root-owned static `/usr/local/sbin/pgw-release-launcher --dry-run` first. A legacy `pgw` service identity or
-`/etc/sudoers.d/pgw` blocks installation. After reviewing the backup and
-migration conditions, explicitly use `--migrate-legacy`. Every real install
+Repository scripts are non-root development/rehearsal helpers only. Transfer a
+verified candidate below `/opt/pgw/inbox/`, then run its root-owned
+`pgw-release-launcher --adopt <assembly> --dry-run` first. A legacy `pgw`
+service identity or `/etc/sudoers.d/pgw` requires the explicit
+`--migrate-legacy` flag. Every real install
 creates a mode-0700 snapshot below `/var/backups/pgw/install.*` containing file
 existence, contents, nft base state and service enablement/activity state.
 Failure triggers automatic restoration.
 
-Updates consume only the root-owned release selected by the independently pinned
-trust manifest. They never consume a checkout, compiler, Git state, or caller
+Updates consume only the root-owned release selected by the local candidate
+manifest. They never consume a checkout, compiler, Git state, or caller
 environment. Roll back explicitly:
 
 ```bash

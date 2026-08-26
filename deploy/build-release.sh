@@ -265,8 +265,8 @@ go_module="$(awk '$1=="module" {print $2; exit}' "${stage}/source/go.mod")"
 cat >"${stage}/version.manifest" <<EOF
 format pgw-version-v2
 release_id ${release_id}
-candidate_only true
-promotion_authority external-github-attestation
+candidate_only false
+promotion_authority self-managed-manifest-sha256
 source_commit ${source_commit}
 source_tree ${source_tree}
 source_dirty ${source_dirty}
@@ -278,6 +278,8 @@ cgo_enabled 0
 build_flags -trimpath,-buildvcs=false,-ldflags=-s_-w
 module_verification same-run-offline
 deterministic_rebuilds 2
+release_manifest_sha256 ${manifest_digest}
+launcher_sha256 $(sha256sum "${stage}/pgw-release-launcher" | awk '{print $1}')
 EOF
 chmod 0600 "${stage}/version.manifest"
 

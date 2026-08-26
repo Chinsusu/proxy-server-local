@@ -47,10 +47,10 @@ def main():
             "candidate-release permissions are not exactly contents:read")
     require("actions/attest@" not in ci and "id-token: write" not in ci and "attestations: write" not in ci,
             "candidate CI can still issue production attestations")
-    require("pgw-candidate-diagnostic-${{ github.sha }}" in body,
-            "candidate-release no longer uploads the blocked diagnostic candidate")
+    require("pgw-self-managed-candidate-${{ github.sha }}" in body,
+            "candidate-release no longer uploads the self-managed candidate")
     require("finalize-release.sh --require-full-system" not in body,
-            "candidate job claims authoritative full-system finalization")
+            "candidate job unexpectedly requests optional full-system finalization")
     print("E2E format and CI dependency contracts: PASS")
 
 

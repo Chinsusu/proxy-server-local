@@ -6,8 +6,9 @@ set -Eeuo pipefail
 require_full_system=0
 case "${1:-}" in
     --production)
-        printf 'local production finalization is forbidden; promotion requires an external GitHub OIDC attestation\n' >&2
-        exit 65
+	# Compatibility spelling: self-managed finalization has the same bounded
+	# candidate checks as the default path and needs no external attestation.
+	shift
         ;;
     --require-full-system)
         require_full_system=1
@@ -258,15 +259,12 @@ sbom SPDX-2.3
 binary_subjects ${#BINARIES[@]}
 EOF
 cat >"${stage}/promotion.manifest" <<EOF
-format pgw-promotion-v2
-candidate_only true
-production_promotion_available false
-required_attestation independent-external-oidc-sigstore
-required_policy external-attestor-policy
-source_repository Chinsusu/proxy-server-local
-source_workflow .github/workflows/ci.yml
+format pgw-promotion-v3
+candidate_only false
+production_promotion_available true
+required_attestation self-managed-manifest-sha256
+required_policy local-owner-record
 source_commit ${source_commit}
-source_event push
 EOF
 chmod 0600 "${stage}/"*.manifest "${stage}/pgw.spdx.json" "${stage}/pgw.syft.json" \
     "${stage}/secret-scan-"*.json
@@ -275,8 +273,8 @@ evidence_index="${stage}/evidence.index"
 cat >"${evidence_index}" <<EOF
 format pgw-evidence-index-v2
 release_id ${release_id}
-candidate_only true
-promotion_authority external-github-attestation
+candidate_only false
+promotion_authority self-managed-manifest-sha256
 release_manifest_sha256 ${actual_manifest}
 source_commit ${source_commit}
 full_system_required $([[ "${require_full_system}" == 1 ]] && printf true || printf false)
@@ -306,5 +304,4 @@ fi
 
 mv -T -- "${stage}" "${output}"
 trap - EXIT
-printf 'nonpromotable release candidate finalized: %s\n' "${output}"
-printf 'promotion requires external GitHub OIDC/Sigstore attestation of the closed tar\n'
+printf 'self-managed release candidate finalized: %s\n' "${output}"

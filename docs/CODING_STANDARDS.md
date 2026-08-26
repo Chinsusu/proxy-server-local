@@ -148,7 +148,7 @@ Không thêm code mới để API/UI chạy `nft`, `sudo`, `systemctl` hoặc gi
 - Không dựng command string từ input. Dùng API hệ điều hành hoặc `exec.CommandContext` với binary/argument allowlist; validate interface, table, chain, port và path trước khi gọi.
 - API/UI chạy non-root. Agent chỉ giữ capability tối thiểu (`CAP_NET_ADMIN`) hoặc gọi helper đặc quyền có giao diện hẹp. Không tạo shell/debug endpoint trên production listener.
 - File state/secret phải có owner và mode tối thiểu cần thiết; tạo file atomically, chống symlink/path traversal khi path chịu ảnh hưởng từ input.
-- Thay đổi auth, crypto, secret, command execution, nftables, install/update hoặc quyền systemd cần negative test và security review riêng.
+- Thay đổi auth, crypto, secret, command execution, nftables, install/update hoặc quyền systemd cần negative test, diff tự kiểm tra kỹ và ghi rõ rollback; security review ngoài chỉ là tùy chọn khi có team.
 
 ## 6. nftables và data-plane safety
 
@@ -170,7 +170,7 @@ Quy tắc triển khai:
 - Không flush/xóa table/chain ngoài ownership đã xác định. Cleanup phải idempotent và không mở cửa sổ traffic leak.
 - Mọi command phải có timeout, capture output có giới hạn và không chứa secret. Không dùng `sh -c`, `eval` hoặc command interpolation.
 - Golden test phải bao phủ render/diff của base rules, `web_only`, overlapping CIDR, duplicate mapping, invalid port/CIDR, UDP deny, IPv6 deny và stable hash.
-- Integration test trên Linux network namespace phải chứng minh egress đúng proxy và các failure mode fail-close; unit test chuỗi rule không đủ để phê duyệt thay đổi enforcement.
+- Integration test trên Linux network namespace phải chứng minh egress đúng proxy và các failure mode fail-close; unit test chuỗi rule không đủ để hoàn tất thay đổi enforcement.
 
 ## 7. Shell script và Makefile
 
@@ -248,7 +248,7 @@ PR chạm data plane phải chạy Linux-only integration test bằng network na
 - hai generation liên tiếp không apply đè/race;
 - reboot/reconcile khôi phục đúng rules.
 
-Không merge bằng cách skip/xóa test thất bại. Nếu môi trường CI không chạy được test đặc quyền, PR phải dẫn tới kết quả từ lab tương đương và có issue để tự động hóa; reviewer data-plane xác nhận bằng chứng.
+Không merge bằng cách skip/xóa test thất bại. Nếu môi trường CI không chạy được test đặc quyền, maintainer phải lưu kết quả từ lab tương đương và có issue để tự động hóa.
 
 ### 9.3 Bằng chứng CI sinh với quyền đặc quyền/root
 
@@ -293,9 +293,9 @@ path traversal và entry ngoài manifest đều bị từ chối.
 - Sửa source/template/generator, không sửa generated output bằng tay. Generated output và source thay đổi trong cùng PR.
 - Nếu gặp binary/backup legacy đã tracked, không cập nhật nó trong PR tính năng. Tạo cleanup PR riêng sau khi xác nhận deployment không phụ thuộc file đó và bổ sung `.gitignore` phù hợp.
 
-## 12. Checklist tự review và review PR
+## 12. Checklist tự kiểm tra
 
-Tác giả và reviewer dùng checklist này theo phạm vi thay đổi:
+Maintainer dùng checklist này theo phạm vi thay đổi; reviewer có thể dùng thêm khi có team:
 
 ### Correctness và thiết kế
 
@@ -323,4 +323,4 @@ Tác giả và reviewer dùng checklist này theo phạm vi thay đổi:
 - [ ] API spec, config reference, docs, changelog và example đã cập nhật.
 - [ ] PR không chứa binary, backup, state, credential hoặc thay đổi ngoài phạm vi.
 
-Một PR không được xem là hoàn tất nếu reviewer chưa thể trả lời: **khi dependency hoặc apply thất bại, traffic của managed client sẽ đi đâu?** Câu trả lời hợp lệ mặc định là: bị chặn hoặc tiếp tục qua rules last-known-good đã xác minh; không bao giờ đi trực tiếp ra WAN.
+Một thay đổi không được xem là hoàn tất nếu maintainer chưa thể trả lời: **khi dependency hoặc apply thất bại, traffic của managed client sẽ đi đâu?** Câu trả lời hợp lệ mặc định là: bị chặn hoặc tiếp tục qua rules last-known-good đã xác minh; không bao giờ đi trực tiếp ra WAN.

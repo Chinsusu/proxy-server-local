@@ -11,6 +11,29 @@ import (
 	"testing"
 )
 
+func TestParseAdoptArguments(t *testing.T) {
+	t.Parallel()
+	assembly, dryRun, installerArgs, err := parseAdoptArguments([]string{"/opt/pgw/inbox/release", "--dry-run"})
+	if err != nil || assembly != "/opt/pgw/inbox/release" || !dryRun || len(installerArgs) != 0 {
+		t.Fatalf("dry-run adoption parse = %q, %t, %#v, %v", assembly, dryRun, installerArgs, err)
+	}
+	assembly, dryRun, installerArgs, err = parseAdoptArguments([]string{"/opt/pgw/inbox/release", "--migrate-legacy", "--lan", "ens19", "--wan", "eth0"})
+	if err != nil || assembly != "/opt/pgw/inbox/release" || dryRun || len(installerArgs) != 5 {
+		t.Fatalf("apply adoption parse = %q, %t, %#v, %v", assembly, dryRun, installerArgs, err)
+	}
+	for _, args := range [][]string{
+		nil,
+		{"relative"},
+		{"/opt/pgw/inbox/release", "--dry-run", "--migrate-legacy"},
+		{"/opt/pgw/inbox/release", "--rollback", "/var/backups/pgw/old"},
+		{"/opt/pgw/inbox/release", "--lan"},
+	} {
+		if _, _, _, err := parseAdoptArguments(args); err == nil {
+			t.Fatalf("unsafe adoption arguments accepted: %#v", args)
+		}
+	}
+}
+
 func TestSecureReleaseOpenRejectsSymlinkWritableAndBindsDescriptor(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("root ownership fixture requires an isolated root CI runner")

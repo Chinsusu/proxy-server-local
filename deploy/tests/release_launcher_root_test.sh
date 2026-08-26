@@ -75,7 +75,7 @@ fixture="$(mktemp -d /tmp/pgw-root-launcher-test.XXXXXXXX)"
 chmod 0700 "${fixture}"
 install -d -m 0755 \
     "${fixture}/etc/pgw" \
-    "${fixture}/var/lib/pgw/releases/${release_id}" \
+    "${fixture}/opt/pgw/releases/${release_id}" \
     "${fixture}/usr/local/sbin" \
     "${fixture}/attacker"
 # `/usr/bin/awk` is an /etc/alternatives symlink on Debian/Ubuntu.  The
@@ -85,7 +85,7 @@ if [[ -d /etc/alternatives ]]; then
     install -d -m 0755 "${fixture}/etc/alternatives"
     cp -a -- /etc/alternatives/. "${fixture}/etc/alternatives/"
 fi
-cp -a -- "${assembly}/release/." "${fixture}/var/lib/pgw/releases/${release_id}/"
+cp -a -- "${assembly}/release/." "${fixture}/opt/pgw/releases/${release_id}/"
 install -o root -g root -m 0600 "${assembly}/release-trust.manifest" \
     "${fixture}/etc/pgw/release-trust.manifest"
 install -o root -g root -m 0755 "${assembly}/pgw-release-launcher" \
@@ -107,6 +107,7 @@ unshare --user --map-root-user --pid --mount --net --ipc --uts --fork --mount-pr
     mount --make-rprivate /
     mount --bind "${fixture}/etc" /etc
     mount --bind "${fixture}/var" /var
+    mount --bind "${fixture}/opt" /opt
     mount --bind "${fixture}/usr/local/sbin" /usr/local/sbin
     cd -- "${fixture}/attacker"
     env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -126,7 +127,7 @@ grep -Fq 'dry-run PASS' "${fixture}/launcher.stderr"
 # The same production launcher must reject a root-owned but group-writable
 # ancestor.  This is executed under root rather than inferred from a skipped Go
 # unit test, and the exact marker proves the negative case reached the launcher.
-unsafe_ancestor="${fixture}/var/lib/pgw/releases"
+unsafe_ancestor="${fixture}/opt/pgw/releases"
 chmod 0770 "${unsafe_ancestor}"
 [[ "$(stat -c '%a' -- "${unsafe_ancestor}")" == 770 ]]
 unsafe_marker="${fixture}/unsafe-ancestor.executed"
@@ -139,6 +140,7 @@ unshare --user --map-root-user --pid --mount --net --ipc --uts --fork --mount-pr
     mount --make-rprivate /
     mount --bind "${fixture}/etc" /etc
     mount --bind "${fixture}/var" /var
+    mount --bind "${fixture}/opt" /opt
     mount --bind "${fixture}/usr/local/sbin" /usr/local/sbin
     printf "case=group-writable-ancestor\nphase=entered\n" >"${marker}"
     set +e
