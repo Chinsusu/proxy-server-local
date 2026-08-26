@@ -1583,11 +1583,24 @@ if [[ "${section}" == all || "${section}" == crash ]]; then
     [[ "${crash_rc}" == 137 ]] || { printf 'legacy sealed crash returned %s, wanted 137\n' "${crash_rc}" >&2; cat "${crash_fixture}/installer.log" >&2; exit 1; }
     journal="${crash_fixture}/system/var/lib/pgw-lifecycle/recovery.journal"
     snapshot="$(sed -n 's/^snapshot=//p' "${journal}")"
-    [[ -f "${journal}" && "${snapshot}" == "${crash_fixture}/backups"/install.* ]]
+    [[ -f "${journal}" && "${snapshot}" == "${crash_fixture}/backups"/install.* ]] || {
+        printf 'legacy sealed crash journal contract failed: boundary=%s journal=%s snapshot=%s\n' \
+            "${legacy_crash}" "$(test -f "${journal}" && printf present || printf absent)" "${snapshot:-missing}" >&2
+        exit 1
+    }
     sealed_stage="${crash_fixture}/system/run/pgw/legacy-sealed.$(basename -- "${snapshot}")"
-    [[ -d "${sealed_stage}" && ! -L "${sealed_stage}" ]]
+    [[ -d "${sealed_stage}" && ! -L "${sealed_stage}" ]] || {
+        printf 'legacy sealed crash stage contract failed: boundary=%s stage=%s directory=%s symlink=%s\n' \
+            "${legacy_crash}" "${sealed_stage}" "$(test -d "${sealed_stage}" && printf yes || printf no)" \
+            "$(test -L "${sealed_stage}" && printf yes || printf no)" >&2
+        exit 1
+    }
     if [[ "${legacy_crash}" == crash_legacy_post_import ]]; then
-        [[ -f "${crash_fixture}/system/run/pgw/legacy-import/report.json" ]]
+        [[ -f "${crash_fixture}/system/run/pgw/legacy-import/report.json" ]] || {
+            printf 'legacy post-import crash report contract failed: report=%s\n' \
+                "$(test -f "${crash_fixture}/system/run/pgw/legacy-import/report.json" && printf present || printf absent)" >&2
+            exit 1
+        }
     fi
     # A sibling is a no-delete canary: recovery may remove only the identity-
     # derived stage, never glob or recursively clean /run/pgw.
@@ -1595,8 +1608,17 @@ if [[ "${section}" == all || "${section}" == crash ]]; then
     mkdir -p "${crash_fixture}/expected-system/run/pgw/legacy-sealed.not-snapshot"
     recover_rc="$(run_failure "${crash_fixture}" recover)"
     [[ "${recover_rc}" == 0 ]] || { printf 'legacy sealed recovery returned %s\n' "${recover_rc}" >&2; cat "${crash_fixture}/installer.log" >&2; exit 1; }
-    [[ ! -e "${sealed_stage}" && -d "${crash_fixture}/system/run/pgw/legacy-sealed.not-snapshot" ]]
-    [[ ! -e "${crash_fixture}/system/run/pgw/legacy-import" ]]
+    [[ ! -e "${sealed_stage}" && -d "${crash_fixture}/system/run/pgw/legacy-sealed.not-snapshot" ]] || {
+        printf 'legacy sealed recovery stage cleanup contract failed: stage_exists=%s sibling_directory=%s\n' \
+            "$(test -e "${sealed_stage}" && printf yes || printf no)" \
+            "$(test -d "${crash_fixture}/system/run/pgw/legacy-sealed.not-snapshot" && printf yes || printf no)" >&2
+        exit 1
+    }
+    [[ ! -e "${crash_fixture}/system/run/pgw/legacy-import" ]] || {
+        printf 'legacy sealed recovery report cleanup contract failed: runtime_exists=%s\n' \
+            "$(test -e "${crash_fixture}/system/run/pgw/legacy-import" && printf yes || printf no)" >&2
+        exit 1
+    }
     if find "${crash_fixture}/system/run/pgw" -name 'legacy-sealed.install.*' -print -quit | grep -q .; then
         printf 'plaintext legacy sealed stage remained after authenticated recovery\n' >&2
         exit 1
