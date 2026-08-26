@@ -174,6 +174,91 @@ func TestV2ControlPlaneUsesIdempotencyVersionsAndRedaction(t *testing.T) {
 	}
 }
 
+func TestV2PatchRequiresMutationFieldsWithoutSideEffects(t *testing.T) {
+	server := testServer(t)
+	admin := map[string]string{"Authorization": "Bearer admin"}
+	proxy := request(t, server, http.MethodPost, "/v2/proxies", `{"id":"empty-patch-proxy","type":"http","host":"proxy.example","port":8080}`, map[string]string{"Authorization": "Bearer admin", "Idempotency-Key": "create-empty-patch-proxy"})
+	if proxy.Code != http.StatusCreated {
+		t.Fatalf("proxy create=%d body=%s", proxy.Code, proxy.Body.String())
+	}
+	client := request(t, server, http.MethodPost, "/v2/clients", `{"id":"empty-patch-client","ip_cidr":"192.168.2.118"}`, map[string]string{"Authorization": "Bearer admin", "Idempotency-Key": "create-empty-patch-client"})
+	if client.Code != http.StatusCreated {
+		t.Fatalf("client create=%d body=%s", client.Code, client.Body.String())
+	}
+
+	for _, test := range []struct {
+		name string
+		path string
+		etag string
+		key  string
+	}{
+		{name: "proxy", path: "/v2/proxies/empty-patch-proxy", etag: proxy.Header().Get("ETag"), key: "empty-patch-proxy"},
+		{name: "client", path: "/v2/clients/empty-patch-client", etag: client.Header().Get("ETag"), key: "empty-patch-client"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := request(t, server, http.MethodGet, test.path, "", admin)
+			if before.Code != http.StatusOK {
+				t.Fatalf("before=%d body=%s", before.Code, before.Body.String())
+			}
+			auditsBefore, err := server.service.Repository().ListAuditPage(context.Background(), 0, 200)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			response := request(t, server, http.MethodPatch, test.path, `{}`, map[string]string{"Authorization": "Bearer admin", "If-Match": test.etag, "Idempotency-Key": test.key})
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"validation_error"`) || !strings.Contains(response.Body.String(), `"field":"body"`) {
+				t.Fatalf("empty patch=%d body=%s", response.Code, response.Body.String())
+			}
+
+			after := request(t, server, http.MethodGet, test.path, "", admin)
+			if after.Code != http.StatusOK || after.Header().Get("ETag") != before.Header().Get("ETag") {
+				t.Fatalf("version changed before=%q after=%q body=%s", before.Header().Get("ETag"), after.Header().Get("ETag"), after.Body.String())
+			}
+			auditsAfter, err := server.service.Repository().ListAuditPage(context.Background(), 0, 200)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(auditsAfter.Items) != len(auditsBefore.Items) {
+				t.Fatalf("audit count changed from %d to %d", len(auditsBefore.Items), len(auditsAfter.Items))
+			}
+		})
+	}
+}
+
+func TestV2ProxyAndClientDeleteReplaySetsHeader(t *testing.T) {
+	server := testServer(t)
+	proxy := request(t, server, http.MethodPost, "/v2/proxies", `{"id":"delete-replay-proxy","type":"http","host":"proxy.example","port":8080}`, map[string]string{"Authorization": "Bearer admin", "Idempotency-Key": "create-delete-replay-proxy"})
+	if proxy.Code != http.StatusCreated {
+		t.Fatalf("proxy create=%d body=%s", proxy.Code, proxy.Body.String())
+	}
+	client := request(t, server, http.MethodPost, "/v2/clients", `{"id":"delete-replay-client","ip_cidr":"192.168.2.119"}`, map[string]string{"Authorization": "Bearer admin", "Idempotency-Key": "create-delete-replay-client"})
+	if client.Code != http.StatusCreated {
+		t.Fatalf("client create=%d body=%s", client.Code, client.Body.String())
+	}
+
+	for _, test := range []struct {
+		name string
+		path string
+		etag string
+		key  string
+	}{
+		{name: "proxy", path: "/v2/proxies/delete-replay-proxy", etag: proxy.Header().Get("ETag"), key: "delete-replay-proxy"},
+		{name: "client", path: "/v2/clients/delete-replay-client", etag: client.Header().Get("ETag"), key: "delete-replay-client"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			headers := map[string]string{"Authorization": "Bearer admin", "If-Match": test.etag, "Idempotency-Key": test.key}
+			first := request(t, server, http.MethodDelete, test.path, "", headers)
+			if first.Code != http.StatusNoContent || first.Header().Get("Idempotency-Replayed") != "" {
+				t.Fatalf("first delete=%d replay=%q body=%s", first.Code, first.Header().Get("Idempotency-Replayed"), first.Body.String())
+			}
+			replay := request(t, server, http.MethodDelete, test.path, "", headers)
+			if replay.Code != http.StatusNoContent || replay.Header().Get("Idempotency-Replayed") != "true" {
+				t.Fatalf("replay delete=%d replay=%q body=%s", replay.Code, replay.Header().Get("Idempotency-Replayed"), replay.Body.String())
+			}
+		})
+	}
+}
+
 func TestV1FacadeUsesApplicationStoreAndNeverReadsPassword(t *testing.T) {
 	server := testServer(t)
 	legacy := server.LegacyV1Handler()

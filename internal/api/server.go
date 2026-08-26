@@ -272,6 +272,10 @@ func (s *Server) proxyByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusBadRequest, "invalid_json", "request body is invalid", nil)
 			return
 		}
+		if input.Label == nil && input.Type == nil && input.Host == nil && input.Port == nil && input.Enabled == nil && input.Username == nil && input.Password == nil && input.PasswordConfigured == nil {
+			writeDomainError(w, r, &domain.ValidationError{Field: "body", Message: "must include at least one mutable field"})
+			return
+		}
 		var password *[]byte
 		if input.Password != nil {
 			p := input.Password.Bytes
@@ -298,9 +302,13 @@ func (s *Server) proxyByID(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if _, err := s.service.DeleteProxy(r.Context(), id, version, actor, key, nil); err != nil {
+		replay, err := s.service.DeleteProxy(r.Context(), id, version, actor, key, nil)
+		if err != nil {
 			writeDomainError(w, r, err)
 			return
+		}
+		if replay {
+			w.Header().Set("Idempotency-Replayed", "true")
 		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
@@ -408,6 +416,10 @@ func (s *Server) clientByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusBadRequest, "invalid_json", "request body is invalid", nil)
 			return
 		}
+		if input.Note == nil && input.Enabled == nil {
+			writeDomainError(w, r, &domain.ValidationError{Field: "body", Message: "must include at least one mutable field"})
+			return
+		}
 		client, replay, err := s.service.PatchClient(r.Context(), id, version, sqlite.PatchClientInput{Note: input.Note, Enabled: input.Enabled, Actor: actor}, key, body)
 		if err != nil {
 			writeDomainError(w, r, err)
@@ -427,9 +439,13 @@ func (s *Server) clientByID(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if _, err := s.service.DeleteClient(r.Context(), id, version, actor, key, nil); err != nil {
+		replay, err := s.service.DeleteClient(r.Context(), id, version, actor, key, nil)
+		if err != nil {
 			writeDomainError(w, r, err)
 			return
+		}
+		if replay {
+			w.Header().Set("Idempotency-Replayed", "true")
 		}
 		w.WriteHeader(http.StatusNoContent)
 	default:

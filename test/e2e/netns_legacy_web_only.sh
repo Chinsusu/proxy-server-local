@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 0077
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
@@ -7,6 +8,7 @@ readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/ipv6_management_oracle_lib.sh"
 EVIDENCE_FORMAT="$(<"${SCRIPT_DIR}/EVIDENCE_FORMAT")"
 readonly EVIDENCE_FORMAT
+readonly EVIDENCE_CONTRACT="pgw-product-evidence-v1"
 readonly RUN_ID="${BASHPID}"
 readonly RESOURCE_TOKEN="${PGW_E2E_RUN_TOKEN:-${RUN_ID}}"
 readonly NAMESPACE_PREFIX="${PGW_E2E_PREFIX:-pgw-e2e-${RUN_ID}}"
@@ -24,6 +26,8 @@ capture_pids=()
 created_namespaces=()
 created_host_interfaces=()
 artifact_dir=""
+artifact_owner_gid=""
+artifact_owner_uid=""
 probe_log=""
 resource_manifest=""
 tmp_dir=""
@@ -120,9 +124,38 @@ capture_product_state() {
     printf 'state_capture=%s\n' "${phase}" >>"${probe_log}"
 }
 
+validate_artifact_tree_entries() {
+    local unexpected_entry=""
+
+    [[ -n "${artifact_dir}" && -d "${artifact_dir}" && ! -L "${artifact_dir}" ]] || return 1
+
+    if ! unexpected_entry="$(find -P "${artifact_dir}" -xdev -mindepth 1 \
+        ! \( -type d -o -type f \) -printf '%p\n' -quit)"; then
+        return 1
+    fi
+    [[ -z "${unexpected_entry}" ]] || return 1
+}
+
+publish_artifact_permissions() {
+    [[ -n "${artifact_dir}" ]] || return 0
+    [[ -e "${artifact_dir}" || -L "${artifact_dir}" ]] || return 0
+    validate_artifact_tree_entries || return 1
+    [[ "${artifact_owner_uid}" =~ ^[0-9]+$ && "${artifact_owner_gid}" =~ ^[0-9]+$ ]] || return 1
+
+    find -P "${artifact_dir}" -xdev -type d \
+        -exec chown -- "${artifact_owner_uid}:${artifact_owner_gid}" {} + || return 1
+    find -P "${artifact_dir}" -xdev -type f \
+        -exec chown -- "${artifact_owner_uid}:${artifact_owner_gid}" {} + || return 1
+    find -P "${artifact_dir}" -xdev -type d -exec chmod -- 0700 {} + || return 1
+    find -P "${artifact_dir}" -xdev -type f -exec chmod -- 0600 {} + || return 1
+
+    validate_artifact_tree_entries || return 1
+}
+
 cleanup() {
     local original_rc=$?
     local cleanup_rc=0
+    local artifact_publish_rc=0
     local capture_status final_rc interface_name namespace pid
     local -a cleanup_capture_pids=("${capture_pids[@]}")
 
@@ -207,8 +240,19 @@ cleanup() {
             cleanup_rc=1
         fi
     fi
-    if [[ -n "${probe_log}" && -f "${probe_log}" ]]; then
-        printf 'cleanup_rc=%d\n' "${cleanup_rc}" >>"${probe_log}"
+    if ! publish_artifact_permissions; then
+        printf 'failed to publish runner-readable product artifacts\n' >&2
+        cleanup_rc=1
+        artifact_publish_rc=1
+    fi
+    if [[ "${artifact_publish_rc}" -eq 0 && -e "${artifact_dir}" ]]; then
+        if validate_artifact_tree_entries && \
+            [[ -n "${probe_log}" && -f "${probe_log}" && ! -L "${probe_log}" ]]; then
+            printf 'cleanup_rc=%d\n' "${cleanup_rc}" >>"${probe_log}"
+        else
+            printf 'refusing to append cleanup status to unsafe product artifact tree\n' >&2
+            cleanup_rc=1
+        fi
     fi
 
     final_rc="${original_rc}"
@@ -579,20 +623,14 @@ probe_udp_capture() {
     return 73
 }
 
-publish_product_artifacts() {
-    local rendered_sha256 rules_file="$1" base_rules_file="$2" dynamic_rules_file="$3"
-
-    install -m 0644 "${rules_file}" "${artifact_dir}/product-rendered-ruleset.nft"
-    install -m 0644 "${base_rules_file}" "${artifact_dir}/product-base-ruleset.nft"
-    install -m 0644 "${dynamic_rules_file}" "${artifact_dir}/product-dynamic-ruleset.nft"
-    (
-        cd -- "${artifact_dir}"
-        sha256sum product-rendered-ruleset.nft >product-rendered-ruleset.sha256
-    )
-    read -r rendered_sha256 _ <"${artifact_dir}/product-rendered-ruleset.sha256"
+write_product_manifest() {
+    local evidence_state="$1"
+    local rendered_sha256="$2"
 
     {
         printf 'format=%s\n' "${EVIDENCE_FORMAT}"
+        printf 'evidence_contract=%s\n' "${EVIDENCE_CONTRACT}"
+        printf 'evidence_state=%s\n' "${evidence_state}"
         printf 'renderer=pkg/nft.RenderBase+RenderDynamic\n'
         printf 'counter_mode=required\n'
         printf 'rendered_sha256=%s\n' "${rendered_sha256}"
@@ -613,11 +651,51 @@ publish_product_artifacts() {
         printf 'rendered_ruleset=product-rendered-ruleset.nft\n'
         printf 'base_ruleset=product-base-ruleset.nft\n'
         printf 'dynamic_ruleset=product-dynamic-ruleset.nft\n'
+        printf 'rendered_sha256_file=product-rendered-ruleset.sha256\n'
         printf 'applied_ruleset_json=product-applied-ruleset.json\n'
         printf 'applied_ruleset_text=product-applied-ruleset.txt\n'
         printf 'counters=product-counters.json\n'
         printf 'probe_log=product-probes.log\n'
+        printf 'valid_dynamic_replacement=product-valid-dynamic-replacement.nft\n'
+        printf 'dynamic_before_invalid_json=product-dynamic-before-invalid.json\n'
+        printf 'dynamic_after_invalid_json=product-dynamic-after-invalid.json\n'
+        printf 'invalid_dynamic_candidate=product-invalid-dynamic-candidate.nft\n'
+        printf 'invalid_dynamic_stdout_log=product-invalid-dynamic.stdout.log\n'
+        printf 'invalid_dynamic_stderr_log=product-invalid-dynamic.stderr.log\n'
+        printf 'base_after_invalid_json=product-base-after-invalid.json\n'
+        printf 'gateway_http_log=gateway-http.log\n'
+        printf 'gateway_http_restarted_log=gateway-http-restarted.log\n'
+        printf 'gateway_dns_tcp_log=gateway-dns-tcp.log\n'
+        printf 'gateway_management_log=gateway-management.log\n'
+        printf 'gateway_management_ipv6_log=gateway-management-ipv6.log\n'
+        printf 'wan_direct_sentinel_log=wan-direct-sentinel.log\n'
+        printf 'wan_http_log=wan-http.log\n'
+        printf 'wan_http6_log=wan-http6.log\n'
+        printf 'udp_control_before_rules_log=udp-control-before-rules.log\n'
+        printf 'udp_blocked_client_log=udp-blocked-client.log\n'
+        printf 'udp_control_after_rules_log=udp-control-after-rules.log\n'
+        printf 'optional_startup_readiness_diagnostics=startup-readiness-diagnostics.txt\n'
+        printf 'optional_readiness_mapped_ipv4_log=readiness-mapped-ipv4.curl.log\n'
+        printf 'optional_readiness_unmapped_ipv4_log=readiness-unmapped-ipv4.curl.log\n'
+        printf 'optional_readiness_ipv6_log=readiness-ipv6.curl.log\n'
+        printf 'optional_readiness_management_ipv6_log=readiness-management-ipv6.curl.log\n'
+        printf 'optional_readiness_direct_sentinel_log=readiness-direct-sentinel.curl.log\n'
+        printf 'optional_counters_capture_error=product-counters.capture-error.txt\n'
     } >"${artifact_dir}/product-manifest.txt"
+}
+
+publish_product_artifacts() {
+    local rendered_sha256 rules_file="$1" base_rules_file="$2" dynamic_rules_file="$3"
+
+    install -m 0600 "${rules_file}" "${artifact_dir}/product-rendered-ruleset.nft"
+    install -m 0600 "${base_rules_file}" "${artifact_dir}/product-base-ruleset.nft"
+    install -m 0600 "${dynamic_rules_file}" "${artifact_dir}/product-dynamic-ruleset.nft"
+    (
+        cd -- "${artifact_dir}"
+        sha256sum product-rendered-ruleset.nft >product-rendered-ruleset.sha256
+    )
+    read -r rendered_sha256 _ <"${artifact_dir}/product-rendered-ruleset.sha256"
+    write_product_manifest complete "${rendered_sha256}"
 }
 
 [[ "$(uname -s)" == "Linux" ]] || fail "network namespace lab requires Linux"
@@ -629,7 +707,7 @@ publish_product_artifacts() {
 [[ "${PGW_E2E_REQUIRE_BASE_KILL_SWITCH:-1}" == "1" ]] || \
     fail "Wave 1 E2E requires PGW_E2E_REQUIRE_BASE_KILL_SWITCH=1"
 
-for command_name in ip nft ss python3 curl tcpdump sysctl install sha256sum awk grep mktemp mv rm cmp; do
+for command_name in ip nft ss python3 curl tcpdump sysctl install sha256sum awk grep find stat chown chmod mktemp mv rm cmp; do
     require_command "${command_name}"
 done
 if [[ -n "${PGW_E2E_RENDER_FIXTURE:-}" ]]; then
@@ -649,12 +727,29 @@ resource_manifest="${PGW_E2E_RESOURCE_MANIFEST:-}"
 if [[ -n "${resource_manifest}" && "${NAMESPACE_PREFIX}" != *"${RESOURCE_TOKEN}"* ]]; then
     fail "PGW_E2E_PREFIX must contain PGW_E2E_RUN_TOKEN when a resource manifest is used"
 fi
-install -d -m 0755 "${artifact_dir}"
+if [[ -L "${artifact_dir}" ]]; then
+    fail "PGW_E2E_ARTIFACT_DIR must not be a symbolic link"
+fi
+if [[ -e "${artifact_dir}" ]]; then
+    [[ -d "${artifact_dir}" ]] || fail "PGW_E2E_ARTIFACT_DIR must be a directory"
+else
+    install -d -m 0700 "${artifact_dir}"
+fi
+[[ -d "${artifact_dir}" && ! -L "${artifact_dir}" ]] || \
+    fail "PGW_E2E_ARTIFACT_DIR is not a link-free directory"
+artifact_owner_uid="$(stat -c '%u' -- "${artifact_dir}")"
+artifact_owner_gid="$(stat -c '%g' -- "${artifact_dir}")"
+[[ "${artifact_owner_uid}" =~ ^[0-9]+$ && "${artifact_owner_gid}" =~ ^[0-9]+$ ]] || \
+    fail "could not determine PGW_E2E_ARTIFACT_DIR owner"
+validate_artifact_tree_entries || fail "PGW_E2E_ARTIFACT_DIR contains an unsupported entry"
+chmod -- 0700 "${artifact_dir}"
+validate_artifact_tree_entries || fail "PGW_E2E_ARTIFACT_DIR contains an unsupported entry"
 probe_log="${artifact_dir}/product-probes.log"
 : >"${probe_log}"
 trap cleanup EXIT
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
+write_product_manifest pending unavailable
 
 assert_resources_absent
 register_resource netns "${CLIENT_NS}"
