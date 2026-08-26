@@ -250,6 +250,28 @@ PR chạm data plane phải chạy Linux-only integration test bằng network na
 
 Không merge bằng cách skip/xóa test thất bại. Nếu môi trường CI không chạy được test đặc quyền, PR phải dẫn tới kết quả từ lab tương đương và có issue để tự động hóa; reviewer data-plane xác nhận bằng chứng.
 
+### 9.3 Bằng chứng CI sinh với quyền đặc quyền/root
+
+Evidence do test namespace/systemd hoặc harness chạy với quyền `root` sinh ra
+KHÔNG ĐƯỢC upload trực tiếp từ cây thư mục root-owned. Trước bất kỳ `chmod`,
+`chown`, đổi ownership/mode, hoặc publish nào, harness PHẢI validate từng entry
+nguồn và toàn bộ path của nó: chỉ file thường và directory cần thiết được phép;
+symlink, hardlink không được phê duyệt, FIFO, socket, block/character device,
+path traversal và entry ngoài manifest đều bị từ chối.
+
+- Bundle publish thành công PHẢI được tạo mới trong thư mục staging do user CI
+  không phải root sở hữu. Chỉ copy một allowlist tên file rõ ràng, đã validate,
+  vào bundle đó; không preserve owner, group, mode đặc quyền, hoặc metadata từ
+  cây nguồn root-owned.
+- Khi test hoặc validation thất bại, PHẢI giữ stdout/stderr, manifest và chẩn
+  đoán cần thiết trong một bundle staging riêng có nhãn rõ
+  `UNVALIDATED_FAILURE_DIAGNOSTICS`. Bundle này chỉ dùng để điều tra, không là
+  bằng chứng pass, không được consumed bởi gate/release, và cũng không được là
+  bản upload thô của cây root-owned.
+- Không được "sửa cho upload được" bằng `chmod`/`chown` một entry chưa
+  validate. Nếu không thể tạo bundle allowlist an toàn, job phải fail và chỉ
+  publish diagnostics đã được staging an toàn theo quy tắc trên.
+
 ## 10. Tài liệu và thay đổi contract
 
 - Code và tài liệu ship trong cùng PR. Comment giải thích **vì sao/invariant**, không diễn giải từng dòng code.
