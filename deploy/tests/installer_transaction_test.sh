@@ -601,7 +601,6 @@ cleanup_nonroot_sealed_ui_case() {
     trap - EXIT
     /usr/bin/python3 -I - "${temp_root}" "${fixture}" "${EUID}" <<'PY' || cleanup_rc=$?
 import os
-import shutil
 import stat
 import sys
 
@@ -614,8 +613,42 @@ if (not os.path.isabs(temp_root) or os.path.normpath(temp_root) != temp_root or
     raise SystemExit("unsafe sealed UI cleanup target")
 
 flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-if not shutil.rmtree.avoids_symlink_attacks:
-    raise SystemExit("symlink-safe sealed UI cleanup is unavailable")
+
+
+def identity(info):
+    return info.st_dev, info.st_ino
+
+
+def remove_tree(parent_fd, entry_name, expected_info=None):
+    listed = os.stat(entry_name, dir_fd=parent_fd, follow_symlinks=False)
+    if expected_info is not None and identity(listed) != identity(expected_info):
+        raise SystemExit("sealed UI cleanup entry identity changed")
+    if not stat.S_ISDIR(listed.st_mode):
+        if listed.st_uid != expected or stat.S_IMODE(listed.st_mode) & 0o022:
+            raise SystemExit("unsafe sealed UI cleanup entry")
+        os.unlink(entry_name, dir_fd=parent_fd)
+        return
+
+    child_fd = os.open(entry_name, flags, dir_fd=parent_fd)
+    try:
+        opened = os.fstat(child_fd)
+        if (identity(opened) != identity(listed) or opened.st_uid != expected or
+                stat.S_IMODE(opened.st_mode) & 0o022):
+            raise SystemExit("unsafe sealed UI cleanup directory")
+        for child_name in os.listdir(child_fd):
+            if not child_name or child_name in (".", "..") or "/" in child_name or "\x00" in child_name:
+                raise SystemExit("unsafe sealed UI cleanup entry name")
+            remove_tree(child_fd, child_name)
+        os.fsync(child_fd)
+    finally:
+        os.close(child_fd)
+
+    rebound = os.stat(entry_name, dir_fd=parent_fd, follow_symlinks=False)
+    if identity(rebound) != identity(opened):
+        raise SystemExit("sealed UI cleanup directory identity changed")
+    os.rmdir(entry_name, dir_fd=parent_fd)
+
+
 temp_fd = os.open(temp_root, flags)
 case_fd = -1
 try:
@@ -655,7 +688,7 @@ try:
         raise SystemExit("sealed UI cleanup case identity changed")
     os.close(case_fd)
     case_fd = -1
-    shutil.rmtree(name, dir_fd=temp_fd)
+    remove_tree(temp_fd, name, case_info)
     try:
         os.stat(name, dir_fd=temp_fd, follow_symlinks=False)
     except FileNotFoundError:
