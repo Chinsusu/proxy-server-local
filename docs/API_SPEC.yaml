@@ -1,285 +1,1064 @@
-
 openapi: 3.1.0
 info:
-  title: Proxy Gateway Manager API
-  version: 1.1.0
+  title: Proxy Gateway Manager v2 API
+  version: 2.0.0
+  description: |
+    This is the implemented PGW v2 control-plane contract. It describes the
+    repository API surface and does not assert that a host is deployed or that
+    any release has been promoted.
+
+    All public v2 operations require an authenticated administrator session or
+    Bearer token. Every mutating request requires Idempotency-Key. Updates,
+    deletes, and mapping state actions also require the resource ETag in
+    If-Match. List endpoints are cursor-paginated with default limit 50 and
+    maximum limit 200.
+
+    Proxy passwords are accepted only on create or patch and are never returned
+    by public endpoints. PGW stores configured proxy credentials encrypted and
+    reports password_configured instead. The Agent-only contract is restricted
+    to the protected Unix-domain socket and is intentionally not part of this
+    public OpenAPI surface.
+
+    The P0 policy is web_only: TCP ports 80 and 443 only. UDP and IPv6 remain
+    denied. No direct-WAN fallback exists. P1 extensions, including all_tcp,
+    HTTPS/CA/SNI behavior, SOCKS5 remote DNS semantics, MAC/VLAN identity, and
+    UI egress proof, are deferred until P0 closes.
 servers:
   - url: http://127.0.0.1:8080
+    description: Local API listener used by the UI/reverse-proxy deployment.
 security:
   - bearerAuth: []
+tags:
+  - name: Proxies
+  - name: Clients
+  - name: Egress policies
+  - name: Mappings
+  - name: Operations
+  - name: Audit
 paths:
-  /v1/health:
+  /v2/proxies:
     get:
-      summary: Liveness probe
-      responses:
-        "200": { description: ok }
-  /v1/auth/login:
-    post:
-      summary: Login and get JWT
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [email, password]
-              properties:
-                email: { type: string, format: email }
-                password: { type: string }
-      responses:
-        "200":
-          description: token
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  token: { type: string }
-  /v1/proxies:
-    get:
+      tags: [Proxies]
       summary: List proxies
       parameters:
-        - in: query
-          name: status
-          schema: { $ref: "#/components/schemas/ProxyStatus" }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        "200":
-          description: list
+        '200':
+          description: A page of redacted proxy records.
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: "#/components/schemas/Proxy" }
+                $ref: '#/components/schemas/ProxyPage'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
-      summary: Create proxy
+      tags: [Proxies]
+      summary: Create a proxy
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ProxyCreate" }
+            schema:
+              $ref: '#/components/schemas/ProxyCreate'
       responses:
-        "201":
-          description: created
+        '201':
+          description: Proxy created. The response never includes a password.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Proxy" }
-  /v1/proxies/{id}:
+              schema:
+                $ref: '#/components/schemas/Proxy'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v2/proxies/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
     get:
-      summary: Get proxy
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
+      tags: [Proxies]
+      summary: Get a redacted proxy
       responses:
-        "200":
-          description: ok
+        '200':
+          description: Proxy record.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Proxy" }
-    put:
-      summary: Update proxy (health-check then store)
+              schema:
+                $ref: '#/components/schemas/Proxy'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Proxies]
+      summary: Patch a proxy
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ProxyUpdate" }
+            schema:
+              $ref: '#/components/schemas/ProxyPatch'
       responses:
-        "200": { description: ok }
+        '200':
+          description: Updated, redacted proxy record.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proxy'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '428':
+          $ref: '#/components/responses/IfMatchRequired'
     delete:
-      summary: Delete proxy
+      tags: [Proxies]
+      summary: Soft-delete a proxy
       parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        "204": { description: deleted }
-  /v1/proxies/check:
+        '204':
+          description: Proxy deleted.
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '428':
+          $ref: '#/components/responses/IfMatchRequired'
+  /v2/clients:
+    get:
+      tags: [Clients]
+      summary: List clients
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of clients.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientPage'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
     post:
-      summary: Ad-hoc health check
+      tags: [Clients]
+      summary: Create a client
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientCreate'
+      responses:
+        '201':
+          description: Client created.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v2/clients/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      tags: [Clients]
+      summary: Get a client
+      responses:
+        '200':
+          description: Client record.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Clients]
+      summary: Patch a client note or enabled state
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientPatch'
+      responses:
+        '200':
+          description: Updated client.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '428':
+          $ref: '#/components/responses/IfMatchRequired'
+    delete:
+      tags: [Clients]
+      summary: Soft-delete a client
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: Client deleted.
+          headers:
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '428':
+          $ref: '#/components/responses/IfMatchRequired'
+  /v2/egress-policies:
+    get:
+      tags: [Egress policies]
+      summary: List policy definitions
+      description: The current v2 policy set provides web_only. Policy mutation is not a public v2 operation.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of egress policies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EgressPolicyPage'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v2/egress-policies/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      tags: [Egress policies]
+      summary: Get an egress policy
+      responses:
+        '200':
+          description: Egress policy record.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EgressPolicy'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v2/mappings:
+    get:
+      tags: [Mappings]
+      summary: List mappings
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of mappings, including desired and observed data-plane state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MappingPage'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Mappings]
+      summary: Create a draft mapping
+      description: Creates DRAFT state only. Use the activate action with the returned ETag to request a new desired generation.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MappingCreate'
+      responses:
+        '201':
+          description: Draft mapping created.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mapping'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v2/mappings/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      tags: [Mappings]
+      summary: Get a mapping
+      responses:
+        '200':
+          description: Mapping record.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mapping'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Mappings]
+      summary: Patch a draft or suspended mapping
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MappingPatch'
+      responses:
+        '200':
+          description: Updated mapping.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mapping'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '428':
+          $ref: '#/components/responses/IfMatchRequired'
+    delete:
+      tags: [Mappings]
+      summary: Request deletion of a mapping
+      description: Returns the mapping in DELETED desired state; Agent reconciliation removes any dynamic redirect.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Mapping transitioned to DELETED desired state.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mapping'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '428':
+          $ref: '#/components/responses/IfMatchRequired'
+  /v2/mappings/{id}/activate:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+      - $ref: '#/components/parameters/IfMatch'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [Mappings]
+      summary: Activate a mapping
+      description: Requests ACTIVE desired state and a new immutable desired generation. It does not claim that the Agent has verified the data plane.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [id]
-              properties:
-                id: { type: string }
+              additionalProperties: false
       responses:
-        "200":
-          description: telemetry
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ProxyTelemetry" }
-  /v1/clients:
-    get:
-      summary: List clients
-      responses:
-        "200":
-          description: list
+        '200':
+          description: Mapping transitioned to ACTIVE desired state.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: "#/components/schemas/Client" }
+                $ref: '#/components/schemas/Mapping'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '428':
+          $ref: '#/components/responses/IfMatchRequired'
+  /v2/mappings/{id}/suspend:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+      - $ref: '#/components/parameters/IfMatch'
+      - $ref: '#/components/parameters/IdempotencyKey'
     post:
-      summary: Create client
+      tags: [Mappings]
+      summary: Suspend a mapping
+      description: Requests SUSPENDED desired state and a new immutable desired generation. Agent reconciliation removes the redirect before stopping its Forwarder.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ClientCreate" }
+            schema:
+              type: object
+              additionalProperties: false
       responses:
-        "201":
-          description: created
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Client" }
-  /v1/mappings:
-    get:
-      summary: List mappings (joined telemetry)
-      responses:
-        "200":
-          description: list
+        '200':
+          description: Mapping transitioned to SUSPENDED desired state.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: "#/components/schemas/MappingView" }
-    post:
-      summary: Create mapping (health gate)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/MappingCreate" }
+                $ref: '#/components/schemas/Mapping'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '428':
+          $ref: '#/components/responses/IfMatchRequired'
+  /v2/agent/state:
+    get:
+      tags: [Operations]
+      summary: Get current reconcile state
+      description: Reports Agent acknowledgment state. ipv6_policy_verified is true only when the current generation is VERIFIED; it is not a generic host-health or egress-proof endpoint.
       responses:
-        "201":
-          description: created
+        '200':
+          description: Reconcile state and the configured deny-only IPv6 policy.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/MappingView" }
-  /v1/mappings/{id}:
-    put:
-      summary: Update mapping (health gate)
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/MappingUpdate" }
-      responses:
-        "200": { description: ok }
-    delete:
-      summary: Delete mapping
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string }
-      responses:
-        "204": { description: deleted }
-  /v1/apply:
-    post:
-      summary: Ask agent to reconcile now
-      responses:
-        "202": { description: enqueued }
-  /v1/events:
+              schema:
+                $ref: '#/components/schemas/OperatorAgentState'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v2/audit-events:
     get:
-      summary: Server-Sent Events stream for UI
+      tags: [Audit]
+      summary: List append-only audit events
+      parameters:
+        - name: cursor
+          in: query
+          description: Non-negative audit event ID after which to read.
+          schema:
+            type: integer
+            minimum: 0
+        - $ref: '#/components/parameters/Limit'
       responses:
-        "200":
-          description: text/event-stream
+        '200':
+          description: A page of audit events. Payloads are redacted and must not contain credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventPage'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: Administrator JWT. Browser clients may use the authenticated UI session instead.
+  parameters:
+    ResourceID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+      description: PGW resource identifier.
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        maxLength: 256
+      description: Opaque cursor returned by the preceding page.
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 50
+        minimum: 1
+        maximum: 200
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+      description: Stable key for one logical mutation. Reusing a key with a different request conflicts.
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: '^"?[1-9][0-9]*"?$'
+      description: Quoted or unquoted positive version from the resource ETag.
+  headers:
+    ETag:
+      description: Quoted positive resource version for conditional mutation.
+      schema:
+        type: string
+        example: '"3"'
+    IdempotencyReplayed:
+      description: Present with value true when a stored successful response is replayed.
+      schema:
+        type: string
+        enum: ['true']
+    XRequestID:
+      description: Request correlation identifier returned on every v2 response.
+      schema:
+        type: string
+  responses:
+    ValidationError:
+      description: Invalid JSON, pagination, header, or domain validation failure.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid administrator authentication.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource was not found.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Current version, idempotency key, state transition, or another resource constraint conflicts with the request.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    IfMatchRequired:
+      description: Conditional mutation omitted If-Match.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
   schemas:
+    Error:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: validation_error
+            message:
+              type: string
+              example: request validation failed
+            details:
+              type: object
+              additionalProperties: true
+        request_id:
+          type: string
+    ProxyType:
+      type: string
+      enum: [http, socks5]
+      description: Current control-plane proxy type. P1 SOCKS5 remote-DNS behavior is not enabled by this field; UDP remains denied.
     ProxyStatus:
       type: string
       enum: [OK, DEGRADED, DOWN]
-    MappingState:
-      type: string
-      enum: [APPLIED, PENDING, FAILED]
-    ProxyBase:
+    ProxyCreate:
       type: object
+      additionalProperties: false
       required: [type, host, port]
       properties:
-        label: { type: string }
-        type: { type: string, enum: [http, socks5] }
-        host: { type: string }
-        port: { type: integer }
-        username: { type: string, nullable: true }
-        password: { type: string, nullable: true }
-        enabled: { type: boolean, default: true }
-    ProxyCreate:
-      allOf: [{ $ref: "#/components/schemas/ProxyBase" }]
-    ProxyUpdate:
-      allOf: [{ $ref: "#/components/schemas/ProxyBase" }]
-    Proxy:
-      allOf:
-        - $ref: "#/components/schemas/ProxyBase"
-        - type: object
-          required: [id]
-          properties:
-            id: { type: string }
-            status: { $ref: "#/components/schemas/ProxyStatus" }
-            latency_ms: { type: integer, nullable: true }
-            exit_ip: { type: string, nullable: true }
-            last_checked_at: { type: string, format: date-time, nullable: true }
-    ProxyTelemetry:
+        id:
+          type: string
+          description: Optional caller-generated identifier.
+        label:
+          type: string
+        type:
+          $ref: '#/components/schemas/ProxyType'
+        host:
+          type: string
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        username:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+        enabled:
+          type: boolean
+          default: true
+    ProxyPatch:
       type: object
+      additionalProperties: false
+      minProperties: 1
       properties:
-        status: { $ref: "#/components/schemas/ProxyStatus" }
-        latency_ms: { type: integer, nullable: true }
-        exit_ip: { type: string, nullable: true }
-        checked_at: { type: string, format: date-time }
-    ClientBase:
+        label:
+          type: string
+        type:
+          $ref: '#/components/schemas/ProxyType'
+        host:
+          type: string
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        enabled:
+          type: boolean
+        username:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+        password_configured:
+          type: boolean
+          description: Set false to remove configured credential material.
+    Proxy:
       type: object
+      required: [id, type, host, port, password_configured, enabled, status, version, proxy_revision, credential_revision, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        type:
+          $ref: '#/components/schemas/ProxyType'
+        host:
+          type: string
+        port:
+          type: integer
+        username:
+          type: string
+        password_configured:
+          type: boolean
+        enabled:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/ProxyStatus'
+        latency_ms:
+          type: [integer, 'null']
+        exit_ip:
+          type: string
+        last_checked_at:
+          type: [string, 'null']
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+        proxy_revision:
+          type: integer
+          minimum: 1
+        credential_revision:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ClientCreate:
+      type: object
+      additionalProperties: false
       required: [ip_cidr]
       properties:
-        ip_cidr: { type: string, example: "192.168.2.3/32" }
-        note: { type: string, nullable: true }
-        enabled: { type: boolean, default: true }
-    ClientCreate:
-      allOf: [{ $ref: "#/components/schemas/ClientBase" }]
+        id:
+          type: string
+        ip_cidr:
+          type: string
+          description: One IPv4 host address or /32 only; broader CIDRs and IPv6 are rejected.
+          example: 192.168.2.101/32
+        note:
+          type: string
+        enabled:
+          type: boolean
+          default: true
+    ClientPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        note:
+          type: string
+        enabled:
+          type: boolean
     Client:
-      allOf:
-        - $ref: "#/components/schemas/ClientBase"
-        - type: object
-          required: [id]
-          properties:
-            id: { type: string }
+      type: object
+      required: [id, ip_cidr, enabled, version, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        ip_cidr:
+          type: string
+        note:
+          type: string
+        enabled:
+          type: boolean
+        version:
+          type: integer
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    EgressPolicy:
+      type: object
+      required: [id, name, kind, enabled, version, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          example: default-web-only
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [web_only]
+          description: TCP ports 80 and 443 only; UDP and IPv6 are denied.
+        enabled:
+          type: boolean
+        version:
+          type: integer
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    DesiredState:
+      type: string
+      enum: [DRAFT, ACTIVE, SUSPENDED, DELETED]
+    DataPlaneState:
+      type: string
+      enum: [VERIFIED, UNKNOWN, FAILED]
+      description: Observed reconciliation result. VERIFIED is not an independent client-egress proof.
     MappingCreate:
       type: object
-      required: [client_id, proxy_id, protocol]
+      additionalProperties: false
+      required: [client_id, proxy_id, local_redirect_port]
       properties:
-        client_id: { type: string }
-        proxy_id: { type: string }
-        protocol: { type: string, enum: [http, socks5] }
-    MappingUpdate:
+        id:
+          type: string
+        client_id:
+          type: string
+        proxy_id:
+          type: string
+        policy_id:
+          type: string
+          default: default-web-only
+        local_redirect_port:
+          type: integer
+          minimum: 15001
+          maximum: 15999
+    MappingPatch:
       type: object
+      additionalProperties: false
+      minProperties: 1
       properties:
-        proxy_id: { type: string }
-        protocol: { type: string, enum: [http, socks5] }
-    MappingView:
+        policy_id:
+          type: string
+        local_redirect_port:
+          type: integer
+          minimum: 15001
+          maximum: 15999
+    Mapping:
       type: object
+      required: [id, client_id, proxy_id, policy_id, local_redirect_port, desired_state, desired_generation, applied_generation, data_plane_state, version, created_at, updated_at]
       properties:
-        id: { type: string }
-        client: { $ref: "#/components/schemas/Client" }
-        proxy: { $ref: "#/components/schemas/Proxy" }
-        state: { $ref: "#/components/schemas/MappingState" }
-        local_redirect_port: { type: integer }
+        id:
+          type: string
+        client_id:
+          type: string
+        proxy_id:
+          type: string
+        policy_id:
+          type: string
+        local_redirect_port:
+          type: integer
+        desired_state:
+          $ref: '#/components/schemas/DesiredState'
+        desired_generation:
+          type: integer
+          minimum: 0
+        applied_generation:
+          type: integer
+          minimum: 0
+        desired_hash:
+          type: string
+        applied_hash:
+          type: string
+        data_plane_state:
+          $ref: '#/components/schemas/DataPlaneState'
+        version:
+          type: integer
+          minimum: 1
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ReconcileState:
+      type: object
+      required: [node_id, pending_generation, applied_generation, state, updated_at]
+      properties:
+        node_id:
+          type: string
+        pending_generation:
+          type: integer
+          minimum: 0
+        applied_generation:
+          type: integer
+          minimum: 0
+        ruleset_hash:
+          type: string
+        state:
+          $ref: '#/components/schemas/DataPlaneState'
+        last_error:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+    OperatorAgentState:
+      allOf:
+        - $ref: '#/components/schemas/ReconcileState'
+        - type: object
+          required: [ipv6_policy, ipv6_policy_verified]
+          properties:
+            ipv6_policy:
+              type: string
+              enum: [deny]
+            ipv6_policy_verified:
+              type: boolean
+    AuditEvent:
+      type: object
+      required: [id, action, entity, created_at]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        actor:
+          type: string
+        action:
+          type: string
+        entity:
+          type: string
+        entity_id:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+          description: Redacted action metadata; never credential material.
+        created_at:
+          type: string
+          format: date-time
+    ProxyPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Proxy'
+        next_cursor:
+          type: string
+    ClientPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Client'
+        next_cursor:
+          type: string
+    EgressPolicyPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EgressPolicy'
+        next_cursor:
+          type: string
+    MappingPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Mapping'
+        next_cursor:
+          type: string
+    AuditEventPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        next_cursor:
+          type: string
+x-historical-v1-1:
+  status: retained-for-context-only
+  description: |
+    The former v1.1 specification described a different API and lifecycle.
+    It is superseded by this v2 contract and must not be used for new
+    integrations or operational authority. The limited v1 compatibility facade
+    remains only while the existing UI migrates; it translates through the v2
+    application transaction and redacts secrets.
+  compatibility_paths:
+    - /v1/health
+    - /v1/auth/login
+    - /v1/proxies
+    - /v1/proxies/{id}
+    - /v1/proxies/{id}/check
+    - /v1/clients
+    - /v1/clients/{id}
+    - /v1/mappings
+    - /v1/mappings/active
+    - /v1/mappings/{id}
