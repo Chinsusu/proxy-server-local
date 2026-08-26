@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	trustFormat   = "pgw-trust-v1"
-	releaseFormat = "pgw-release-v1"
+	trustFormat                   = "pgw-trust-v1"
+	releaseFormat                 = "pgw-release-v1"
+	selfManagedPromotionAuthority = "self-managed-manifest-sha256"
 )
 
 var (
@@ -46,10 +47,16 @@ type releaseEntry struct {
 	Mode   uint32
 }
 
+type selfManagedVersion struct {
+	ReleaseID      string
+	ManifestSHA256 string
+	LauncherSHA256 string
+}
+
 var requiredReleaseEntries = []string{
 	"deploy/install-pgw.sh",
 	"deploy/rehearse-release.sh",
-	"artifacts/pgw-api", "artifacts/pgw-agent", "artifacts/pgw-fwd", "artifacts/pgw-ui", "artifacts/pgw-health",
+	"artifacts/pgw-api", "artifacts/pgw-agent", "artifacts/pgw-fwd", "artifacts/pgw-ui", "artifacts/pgw-health", "artifacts/pgw-snapshot-crypt",
 	"deploy/install-pgw-base.sh", "deploy/pgw-verify-base.sh", "deploy/nftables.conf", "deploy/sysctl-pgw.conf",
 	"deploy/pgw-verify-ui-bind.sh",
 	"deploy/restore_snapshot.py",
@@ -128,6 +135,41 @@ func parseRelease(r io.Reader) ([]releaseEntry, error) {
 		return nil, errors.New("release manifest contains unapproved entries")
 	}
 	return entries, nil
+}
+
+// parseSelfManagedVersion accepts only a clean, locally reproducible release
+// candidate. It intentionally contains no GitHub, OIDC, or approval identity:
+// the gateway owner selects the candidate by its recorded digests.
+func parseSelfManagedVersion(r io.Reader) (selfManagedVersion, error) {
+	values, err := parseKeyValue(r, 20)
+	if err != nil {
+		return selfManagedVersion{}, err
+	}
+	if len(values) != 17 || values["format"] != "pgw-version-v2" ||
+		values["candidate_only"] != "false" ||
+		values["promotion_authority"] != selfManagedPromotionAuthority ||
+		values["source_dirty"] != "false" {
+		return selfManagedVersion{}, errors.New("invalid self-managed version manifest")
+	}
+	for _, key := range []string{
+		"release_id", "source_commit", "source_tree", "source_commit_time", "go_module", "go_version",
+		"target", "cgo_enabled", "build_flags", "module_verification", "deterministic_rebuilds",
+		"release_manifest_sha256", "launcher_sha256",
+	} {
+		if values[key] == "" {
+			return selfManagedVersion{}, fmt.Errorf("self-managed version manifest missing %q", key)
+		}
+	}
+	if !safeReleaseID.MatchString(values["release_id"]) || values["target"] != "linux/amd64" ||
+		values["cgo_enabled"] != "0" || values["deterministic_rebuilds"] != "2" ||
+		!validDigest(values["release_manifest_sha256"]) || !validDigest(values["launcher_sha256"]) {
+		return selfManagedVersion{}, errors.New("invalid self-managed version identity")
+	}
+	return selfManagedVersion{
+		ReleaseID:      values["release_id"],
+		ManifestSHA256: values["release_manifest_sha256"],
+		LauncherSHA256: values["launcher_sha256"],
+	}, nil
 }
 
 func parseKeyValue(r io.Reader, maxLines int) (map[string]string, error) {

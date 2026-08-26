@@ -95,3 +95,43 @@ func TestForbiddenCallerEnvironment(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSelfManagedVersionStrict(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		"format pgw-version-v2",
+		"release_id release-20260826",
+		"candidate_only false",
+		"promotion_authority self-managed-manifest-sha256",
+		"source_commit " + strings.Repeat("a", 40),
+		"source_tree " + strings.Repeat("b", 40),
+		"source_dirty false",
+		"source_commit_time 2026-08-26T00:00:00Z",
+		"go_module example.invalid/pgw",
+		"go_version go1.26.7",
+		"target linux/amd64",
+		"cgo_enabled 0",
+		"build_flags -trimpath,-buildvcs=false,-ldflags=-s_-w",
+		"module_verification same-run-offline",
+		"deterministic_rebuilds 2",
+		"release_manifest_sha256 " + strings.Repeat("c", 64),
+		"launcher_sha256 " + strings.Repeat("d", 64),
+	}, "\n") + "\n"
+	got, err := parseSelfManagedVersion(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("parseSelfManagedVersion: %v", err)
+	}
+	if got.ReleaseID != "release-20260826" || got.ManifestSHA256 != strings.Repeat("c", 64) {
+		t.Fatalf("unexpected self-managed version: %#v", got)
+	}
+	for _, mutation := range []string{
+		strings.Replace(input, "candidate_only false", "candidate_only true", 1),
+		strings.Replace(input, "source_dirty false", "source_dirty true", 1),
+		strings.Replace(input, "launcher_sha256 "+strings.Repeat("d", 64), "launcher_sha256 "+strings.Repeat("D", 64), 1),
+		input + "unexpected value\n",
+	} {
+		if _, err := parseSelfManagedVersion(strings.NewReader(mutation)); err == nil {
+			t.Fatalf("unsafe self-managed version accepted: %q", mutation)
+		}
+	}
+}

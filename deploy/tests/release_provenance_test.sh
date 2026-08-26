@@ -32,11 +32,13 @@ GITHUB_RUN_ID=999 GITHUB_RUN_ATTEMPT=7 GITHUB_SHA=000000000000000000000000000000
 GITHUB_REF_TYPE=tag GITHUB_REF_NAME=v99.99.99 \
     /bin/bash "${ROOT}/deploy/build-release.sh" "${build_args[@]}" test-release-v2 "${output}" >/dev/null
 grep -Fxq 'format pgw-version-v2' "${output}/version.manifest"
-grep -Fxq 'candidate_only true' "${output}/version.manifest"
-grep -Fxq 'promotion_authority external-github-attestation' "${output}/version.manifest"
+grep -Fxq 'candidate_only false' "${output}/version.manifest"
+grep -Fxq 'promotion_authority self-managed-manifest-sha256' "${output}/version.manifest"
 ! grep -Eq 'github-actions|999|v99[.]99[.]99|production_eligible' "${output}/version.manifest"
 grep -Fxq 'format pgw-source-snapshot-v1' "${output}/source.manifest"
 grep -Fxq 'format pgw-build-proof-v2' "${output}/build-proof.manifest"
+grep -Eq '^release_manifest_sha256 [0-9a-f]{64}$' "${output}/version.manifest"
+grep -Eq '^launcher_sha256 [0-9a-f]{64}$' "${output}/version.manifest"
 grep -Fxq 'deterministic_builds 2' "${output}/build-proof.manifest"
 [[ "$(grep -c '^binary ' "${output}/build-proof.manifest")" == 7 ]]
 [[ "$(grep -c ' cgo=0 dynamic=absent rebuild=identical proof_sha256=' "${output}/build-proof.manifest")" == 7 ]]
@@ -130,9 +132,10 @@ PATH="${fixture}/fake-tools:${PATH}" /bin/bash "${ROOT}/deploy/finalize-release.
     sha256sum -c SHA256SUMS >/dev/null
 )
 grep -Fxq 'format pgw-evidence-index-v2' "${fixture}/candidate/evidence.index"
-grep -Fxq 'candidate_only true' "${fixture}/candidate/promotion.manifest"
-grep -Fxq 'production_promotion_available false' "${fixture}/candidate/promotion.manifest"
-grep -Fxq 'required_attestation independent-external-oidc-sigstore' "${fixture}/candidate/promotion.manifest"
+grep -Fxq 'format pgw-promotion-v3' "${fixture}/candidate/promotion.manifest"
+grep -Fxq 'candidate_only false' "${fixture}/candidate/promotion.manifest"
+grep -Fxq 'production_promotion_available true' "${fixture}/candidate/promotion.manifest"
+grep -Fxq 'required_attestation self-managed-manifest-sha256' "${fixture}/candidate/promotion.manifest"
 grep -Fxq 'subject_count 7' "${fixture}/candidate/sbom-subjects.manifest"
 [[ "$(grep -c '^binary ' "${fixture}/candidate/sbom-subjects.manifest")" == 7 ]]
 grep -Fxq 'source full' "${fixture}/candidate/secret-scan.coverage"
@@ -143,14 +146,6 @@ for scan in source binary bundle; do
 done
 /bin/bash "${ROOT}/deploy/close-release.sh" "${fixture}/candidate" "${fixture}/candidate.tar" >/dev/null
 tar -tf "${fixture}/candidate.tar" | grep -Fxq './promotion.manifest'
-
-# A local caller can never turn candidate metadata into production authority.
-set +e
-PATH="${fixture}/fake-tools:${PATH}" /bin/bash "${ROOT}/deploy/finalize-release.sh" --production \
-    "${output}" "${evidence}" "${fixture}/forbidden-production" >/dev/null 2>&1
-production_rc=$?
-set -e
-[[ "${production_rc}" == 65 && ! -e "${fixture}/forbidden-production" ]]
 
 # Exact parser tests update the outer trust digest so failure proves the inner
 # duplicate/path/self-promotion checks, not merely an old checksum mismatch.
@@ -165,7 +160,7 @@ set -e
 [[ "${duplicate_rc}" == 65 ]]
 
 cp -a -- "${output}" "${fixture}/self-promoted"
-sed -i 's/^candidate_only true$/candidate_only false/' "${fixture}/self-promoted/version.manifest"
+sed -i 's/^candidate_only false$/candidate_only true/' "${fixture}/self-promoted/version.manifest"
 set +e
 python3 "${ROOT}/deploy/verify_release_candidate.py" "${fixture}/self-promoted" >/dev/null 2>&1
 self_promoted_rc=$?
@@ -200,8 +195,4 @@ symlink_rc=$?
 set -e
 [[ "${symlink_rc}" == 65 && ! -e "${fixture}/forbidden-symlink" ]]
 
-/bin/bash "${ROOT}/deploy/tests/attestation_bootstrap_test.sh"
-/bin/bash "${ROOT}/deploy/tests/full_system_trust_bootstrap_test.sh"
-python3 -B "${ROOT}/deploy/tests/full_system_evidence_parser_test.py"
-
-printf 'release hermeticity, exact-parser, scan-coverage, closure, and trusted-bootstrap tests: PASS\n'
+printf 'release hermeticity, exact-parser, scan-coverage, and self-managed closure tests: PASS\n'

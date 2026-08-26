@@ -221,14 +221,15 @@ def verify(assembly: Path) -> tuple[str, str, str]:
             "format", "release_id", "candidate_only", "promotion_authority",
             "source_commit", "source_tree", "source_dirty", "source_commit_time",
             "go_module", "go_version", "target", "cgo_enabled", "build_flags",
-            "module_verification", "deterministic_rebuilds",
+            "module_verification", "deterministic_rebuilds", "release_manifest_sha256",
+            "launcher_sha256",
         ),
     )
     if version["format"] != "pgw-version-v2" or not SAFE_ID.fullmatch(version["release_id"]):
         raise CandidateError("invalid candidate version identity")
     fixed = {
-        "candidate_only": "true",
-        "promotion_authority": "external-github-attestation",
+        "candidate_only": "false",
+        "promotion_authority": "self-managed-manifest-sha256",
         "target": "linux/amd64",
         "cgo_enabled": "0",
         "build_flags": "-trimpath,-buildvcs=false,-ldflags=-s_-w",
@@ -236,16 +237,20 @@ def verify(assembly: Path) -> tuple[str, str, str]:
         "deterministic_rebuilds": "2",
     }
     if any(version[key] != value for key, value in fixed.items()):
-        raise CandidateError("candidate attempted to self-assert promotion or build policy")
+        raise CandidateError("candidate has an invalid self-managed build policy")
     if not SHA.fullmatch(version["source_commit"]) or not SHA.fullmatch(version["source_tree"]):
         raise CandidateError("invalid source Git identity")
-    if version["source_dirty"] not in ("true", "false"):
-        raise CandidateError("invalid source dirty state")
+    if version["source_dirty"] != "false":
+        raise CandidateError("self-managed release source must be clean")
     if not re.fullmatch(r"go1[.][0-9]+[.][0-9]+", version["go_version"]):
         raise CandidateError("Go toolchain is not pinned exactly")
     regular_tree(assembly)
     verify_source(assembly, version)
     release_digest = verify_release_manifest(assembly, version["release_id"])
+    if version["release_manifest_sha256"] != release_digest:
+        raise CandidateError("version manifest release digest mismatch")
+    if not HEX.fullmatch(version["launcher_sha256"]) or sha256(assembly / "pgw-release-launcher") != version["launcher_sha256"]:
+        raise CandidateError("version manifest launcher digest mismatch")
     verify_migrations(assembly)
     verify_build_proof(assembly)
     return version["release_id"], version["source_commit"], release_digest

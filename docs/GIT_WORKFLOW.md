@@ -111,7 +111,7 @@ git fetch origin --prune
 git switch --create feat/123-short-name origin/main
 ```
 
-Trước khi yêu cầu review hoặc merge:
+Trước khi merge hoặc release:
 
 ```bash
 git fetch origin
@@ -131,31 +131,29 @@ git push --force-with-lease
 
 Không dùng `git push --force`, không force-push `main`, nhánh release/tag hoặc nhánh đang được nhiều người chia sẻ. Với nhánh dùng chung, merge `origin/main` hoặc phối hợp rõ với các contributor thay vì tự rewrite lịch sử.
 
-## 6. Vòng đời pull request
+## 6. Vòng đời thay đổi
 
-1. Mở Draft PR sớm để CI chạy và thể hiện phạm vi.
-2. Điền đầy đủ PR template; liên kết issue bằng từ khóa GitHub.
-3. Tự review diff, bỏ debug/backup/generated artifact không chủ đích và cập nhật test/docs.
-4. Rebase lên `origin/main`, xử lý conflict tại nhánh nguồn và chạy lại verification.
-5. Chuyển Ready for review; CODEOWNERS tự động xác định reviewer tối thiểu.
-6. Xử lý từng comment bằng commit mới hoặc `fixup!`; không resolve comment của reviewer khi chưa xử lý hoặc thống nhất.
-7. Sau approval và toàn bộ required checks xanh, merge theo chiến lược ở mục 8.
-8. Xóa nhánh sau merge và theo dõi deployment/smoke test nếu PR có runtime impact.
+1. Có thể mở Draft PR để CI chạy và lưu context, nhưng PR không bắt buộc khi chỉ có một maintainer.
+2. Tự kiểm tra diff, bỏ debug/backup/generated artifact không chủ đích và cập nhật test/docs.
+3. Rebase lên `origin/main`, xử lý conflict tại nhánh nguồn và chạy lại verification.
+4. Khi có contributor, xử lý comment bằng commit mới hoặc `fixup!`.
+5. Khi toàn bộ check liên quan xanh, maintainer có thể tự merge theo chiến lược ở mục 8.
+6. Xóa nhánh sau merge và theo dõi deployment/smoke test nếu thay đổi có runtime impact.
 
-Không self-approve. Tác giả chịu trách nhiệm cho chất lượng PR dù automation và reviewer đều pass.
+Maintainer chịu trách nhiệm cho chất lượng thay đổi. Review bên ngoài là tùy chọn
+khi có team, không phải điều kiện để dùng dự án cá nhân.
 
-## 7. Review gates và bằng chứng
+## 7. Quality gate và bằng chứng
 
-Mọi PR phải có:
+Mọi thay đổi trước khi merge phải có:
 
-- Ít nhất 1 approval của code owner không phải tác giả.
-- Không còn unresolved conversation.
 - Nhánh up-to-date với `main` và toàn bộ required CI checks thành công.
 - Test tương xứng với thay đổi; bug fix có regression test khi khả thi.
 - Tài liệu, config example, migration/rollback note và changelog được cập nhật khi có tác động tương ứng.
 - Không có plaintext secret trong code, fixture, log hoặc screenshot.
 
-PR rủi ro cao cần ít nhất **2 approvals**, trong đó có maintainer hiểu vùng bị ảnh hưởng:
+Thay đổi rủi ro cao cần bằng chứng bổ sung, nhưng không cần approval của người
+khác khi maintainer là người duy nhất vận hành dự án:
 
 - nftables, routing, TPROXY, Agent reconcile hoặc Forwarder.
 - Authentication/authorization, secret storage, cryptography hoặc audit.
@@ -174,13 +172,15 @@ Bằng chứng bổ sung theo vùng:
 | UI | Screenshot hoặc recording; error/loading/empty state; accessibility check cơ bản |
 | Performance | Baseline, workload, before/after và guardrail |
 
-Nếu CI chưa có môi trường phù hợp cho network E2E, reviewer phải kiểm tra bằng chứng chạy thủ công được ghi trong PR. Không được tick checklist nếu không có log, artifact hoặc mô tả lệnh/kết quả có thể tái tạo.
+Nếu CI chưa có môi trường phù hợp cho network E2E, maintainer phải lưu bằng
+chứng chạy thủ công có thể tái tạo. Không được đánh dấu hoàn tất nếu không có
+log, artifact hoặc mô tả lệnh/kết quả.
 
 ## 8. Chiến lược merge
 
 **Squash merge** là mặc định. Tiêu đề PR phải là Conventional Commit vì nó trở thành commit trên `main`; body PR lưu context và liên kết issue.
 
-Dùng **rebase merge** chỉ khi PR đã có chuỗi commit nguyên tử, mỗi commit đều pass và lịch sử riêng lẻ có giá trị cho `git bisect`/revert. Cần maintainer chấp thuận.
+Dùng **rebase merge** chỉ khi chuỗi commit nguyên tử, mỗi commit đều pass và lịch sử riêng lẻ có giá trị cho `git bisect`/revert.
 
 Không dùng merge commit cho feature PR. Chỉ maintainer mới được dùng merge commit trong tình huống tích hợp được ghi nhận rõ. Không merge khi check đang pending/skip ngoài dự kiến và không bypass branch protection để “sửa sau”.
 
@@ -199,11 +199,11 @@ git push origin v2.0.0
 
 Release PR cập nhật `CHANGELOG.md`, migration/rollback runbook và phiên bản nếu có; CI tạo artifact bất biến, checksum, SBOM và provenance theo capability hiện có. Không build lại thủ công rồi gắn cùng một version.
 
-Hotfix vẫn đi qua PR:
+Hotfix dùng cùng quality gate, có thể thực hiện trực tiếp bởi maintainer:
 
 1. Tạo `hotfix/<issue>-<slug>` từ `origin/main` (hoặc từ tag đang chạy nếu maintainer tuyên bố maintenance line).
 2. Chỉ đưa minimal fix, regression test và rollback procedure.
-3. Chạy full required checks; vùng fail-close/security cần 2 approvals trừ khi incident commander ghi nhận emergency override.
+3. Chạy full required checks; vùng fail-close/security cần negative test, backup và rollback procedure rõ ràng.
 4. Merge vào `main`, phát hành patch version và xác minh production.
 
 Hoàn tác bằng PR chứa `git revert`, không reset hoặc rewrite `main`:
@@ -216,20 +216,20 @@ git push -u origin HEAD
 
 Nếu revert migration/data-plane không an toàn, dừng rollout, dùng runbook/LKG đã kiểm chứng và mở incident. PR revert phải liên kết PR gốc, nêu dữ liệu/config chịu tác động và điều kiện forward-fix.
 
-## 10. Cấu hình protected branch đề xuất
+## 10. Cấu hình Git đề xuất
 
 Cấu hình ruleset cho `main`:
 
-- Require pull request before merging; 1 approval mặc định.
-- Require review from Code Owners; dismiss stale approvals khi có commit mới.
-- Require conversation resolution.
+- Pull request và CODEOWNERS là tùy chọn; một maintainer có thể merge trực tiếp sau khi tự kiểm tra quality gate.
+- Nếu dùng PR, có thể dismiss stale approvals và yêu cầu resolve conversation theo nhu cầu của team.
 - Require status checks và branch up-to-date trước merge. Baseline: formatting/lint, unit test, `go vet`, build tất cả binaries, secret/dependency scan; thêm network E2E khi workflow sẵn sàng.
 - Require signed commits cho maintainer/release automation khi tổ chức đã quản lý key; luôn require signed annotated release tags.
 - Block force pushes và deletion; không cho bypass ngoại trừ break-glass role được audit.
-- Restrict direct pushes; cho phép squash merge, tắt merge commit, chỉ bật rebase merge khi team thực sự dùng.
+- Có thể restrict direct pushes khi có team; với dự án cá nhân, giữ quyền direct push cho maintainer.
 - Require linear history, automatic branch deletion và tag protection cho `v*`.
 
-GitHub không thể tự tăng approval theo đường dẫn bằng branch protection cơ bản. Với PR rủi ro cao, maintainer thực thi gate 2 approvals qua ruleset bổ sung hoặc review policy cho tới khi có automation.
+Không cấu hình số approval hoặc team membership làm release blocker cho dự án
+cá nhân. Technical checks, backup, canary và rollback mới là gate bắt buộc.
 
 ## 11. Khôi phục Git an toàn
 
@@ -244,4 +244,7 @@ Không dùng `reset --hard` để “sửa” nhánh đã chia sẻ. Nếu đã 
 
 ## 12. Definition of Done
 
-Một PR chỉ hoàn tất khi code đã merge, CI pass, test và bằng chứng đúng mức rủi ro, docs/config/migration note đã cập nhật, không lộ secret, và có rollback khả thi. Với release v2.0, Definition of Done chi tiết trong blueprint vẫn là chuẩn cao hơn và được ưu tiên khi có khác biệt.
+Một thay đổi chỉ hoàn tất khi code đã merge, CI pass, test và bằng chứng đúng
+mức rủi ro, docs/config/migration note đã cập nhật, không lộ secret, và có
+rollback khả thi. Với release v2.0, Definition of Done chi tiết trong blueprint
+vẫn là chuẩn cao hơn và được ưu tiên khi có khác biệt.
