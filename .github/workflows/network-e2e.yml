@@ -1143,29 +1143,69 @@ jobs:
             fi
           }
 
-          bundle="$(mktemp -d "$RUNNER_TEMP/.pgw-netns-upload-bundle.XXXXXXXXXX")"
-          chmod 0700 "$bundle"
-          stage_tree "$evidence_source" "$bundle/pgw-netns-evidence"
+          prepare_product_bundle() {
+            local candidate_bundle product_copy
+
+            audit_product_package "$PRODUCT_PACKAGE_PATH" || return 1
+            product_copy="$(mktemp -d \
+              "$RUNNER_TEMP/.pgw-e2e-product-copy.XXXXXXXXXX")" || return 1
+            chmod 0700 "$product_copy" || return 1
+            stage_tree "$PRODUCT_PACKAGE_PATH" "$product_copy" || return 1
+            audit_product_package "$product_copy" || return 1
+
+            candidate_bundle="$(mktemp -d \
+              "$RUNNER_TEMP/pgw-netns-upload-bundle.XXXXXXXXXX")" || return 1
+            chmod 0700 "$candidate_bundle" || return 1
+            stage_tree "$evidence_source" \
+              "$candidate_bundle/pgw-netns-evidence" || return 1
+            [[ ! -e "$candidate_bundle/$product_destination" && \
+                ! -L "$candidate_bundle/$product_destination" ]] || return 1
+            mv -- "$product_copy" \
+              "$candidate_bundle/$product_destination" || return 1
+            audit_bundle "$candidate_bundle" 1 || return 1
+            prepared_product_bundle="$candidate_bundle"
+          }
+
+          generic_bundle="$(mktemp -d \
+            "$RUNNER_TEMP/pgw-netns-upload-bundle.XXXXXXXXXX")"
+          chmod 0700 "$generic_bundle"
+          stage_tree "$evidence_source" "$generic_bundle/pgw-netns-evidence"
+          audit_bundle "$generic_bundle" 0
+
+          bundle="$generic_bundle"
           product_included=0
+          deferred_failure=0
           if [[ "$PRODUCT_PACKAGE_READY" == "true" ]]; then
-            if audit_product_package "$PRODUCT_PACKAGE_PATH"; then
-              product_copy="$(mktemp -d \
-                "$RUNNER_TEMP/.pgw-e2e-product-copy.XXXXXXXXXX")"
-              chmod 0700 "$product_copy"
-              stage_tree "$PRODUCT_PACKAGE_PATH" "$product_copy"
-              audit_product_package "$product_copy"
-              mv -- "$product_copy" "$bundle/$product_destination"
+            if prepare_product_bundle; then
+              bundle="$prepared_product_bundle"
               product_included=1
             else
-              echo "excluding product package that failed provenance audit" >&2
+              echo "ready product package failed provenance/copy audit; publishing generic evidence" \
+                >&2
+              deferred_failure=1
+            fi
+          elif [[ -n "$PRODUCT_PACKAGE_READY" || -n "$PRODUCT_PACKAGE_PATH" ]]; then
+            echo "inconsistent product package outputs; publishing generic evidence" >&2
+            deferred_failure=1
+          fi
+
+          if ! audit_bundle "$bundle" "$product_included"; then
+            if [[ "$product_included" -eq 1 ]]; then
+              echo "final product bundle audit failed; publishing generic evidence" >&2
+              bundle="$generic_bundle"
+              product_included=0
+              deferred_failure=1
+              audit_bundle "$bundle" 0
+            else
+              exit 1
             fi
           fi
-          audit_bundle "$bundle" "$product_included"
           {
             echo "bundle_ready=true"
             echo "bundle_path=$bundle"
             echo "product_package_included=$product_included"
           } >> "$GITHUB_OUTPUT"
+          exit "$deferred_failure"
 
       - name: Upload namespace evidence
         if: ${{ always() && steps.prepare_upload.outputs.bundle_ready == 'true' }}
