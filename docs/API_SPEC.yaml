@@ -288,7 +288,7 @@ paths:
     get:
       tags: [Egress policies]
       summary: List policy definitions
-      description: The current v2 policy set provides web_only. Policy mutation is not a public v2 operation.
+      description: The current v2 policy set provides web_only. Egress policies are intentionally read-only in the current implementation; policy mutation is unavailable on the public v2 API.
       parameters:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
@@ -902,7 +902,6 @@ components:
     MappingPatch:
       type: object
       additionalProperties: false
-      minProperties: 1
       properties:
         policy_id:
           type: string
