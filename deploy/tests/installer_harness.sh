@@ -210,28 +210,41 @@ if [[ "${boundary}" == recover_restore_crash ]]; then
     trap - EXIT
     exit 0
 fi
-if [[ "${boundary}" == verified_api_descriptor || "${boundary}" == rejected_api_descriptor ]]; then
+if [[ "${boundary}" == verified_api_descriptor || "${boundary}" == rejected_api_descriptor || \
+      "${boundary}" == verified_snapshot_crypt_descriptor || "${boundary}" == rejected_snapshot_crypt_descriptor ]]; then
     # Production runs only from launcher-held descriptors.  /proc represents
     # those descriptors as symlinks, so exercise the real preflight contract:
     # accept the verified descriptor while ordinary release paths still have
     # their no-symlink check.
-    exec 8<"${artifact_root}/pgw-api"
-    if [[ "${boundary}" == verified_api_descriptor ]]; then
-        export PGW_RELEASE_FD_MAP='artifacts/pgw-api=8'
+    descriptor_artifact=pgw-api
+    descriptor_relative=artifacts/pgw-api
+    if [[ "${boundary}" == verified_snapshot_crypt_descriptor || "${boundary}" == rejected_snapshot_crypt_descriptor ]]; then
+        descriptor_artifact=pgw-snapshot-crypt
+        descriptor_relative=artifacts/pgw-snapshot-crypt
+    fi
+    exec 8<"${artifact_root}/${descriptor_artifact}"
+    if [[ "${boundary}" == verified_api_descriptor || "${boundary}" == verified_snapshot_crypt_descriptor ]]; then
+        export PGW_RELEASE_FD_MAP="${descriptor_relative}=8"
     else
-        export PGW_RELEASE_FD_MAP='artifacts/pgw-api=9'
+        export PGW_RELEASE_FD_MAP="${descriptor_relative}=9"
     fi
     release_file() {
-        if [[ "$1" == artifacts/pgw-api ]]; then
+        if [[ "$1" == "${descriptor_relative}" ]]; then
             printf '/proc/self/fd/8\n'
             return
         fi
         production_release_file "$1"
     }
-    allow_legacy=1
-    preflight_legacy_state
-    [[ "${legacy_state_pending}" == 1 && "${legacy_state_checksum}" =~ ^[0-9a-f]{64}$ ]] \
-        || die "verified pgw-api descriptor did not complete legacy preflight"
+    if [[ "${descriptor_relative}" == artifacts/pgw-api ]]; then
+        allow_legacy=1
+        preflight_legacy_state
+        [[ "${legacy_state_pending}" == 1 && "${legacy_state_checksum}" =~ ^[0-9a-f]{64}$ ]] \
+            || die "verified pgw-api descriptor did not complete legacy preflight"
+    else
+        helper="$(release_file "${descriptor_relative}")"
+        release_executable_is_trusted "${descriptor_relative}" "${helper}" \
+            || die "snapshot helper descriptor was not accepted"
+    fi
     exec 8<&-
     trap - EXIT
     exit 0
