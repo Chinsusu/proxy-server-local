@@ -1053,6 +1053,29 @@ if [[ "${section}" == all || "${section}" == success ]]; then
         cat "${fixture}/installer.log" >&2
         exit 1
     }
+    printf 'verified launcher descriptor accepts snapshot encryption helper\n'
+    fixture="${temp_root}/verified-snapshot-crypt-descriptor"
+    make_fixture "${fixture}" active
+    rc="$(run_failure "${fixture}" verified_snapshot_crypt_descriptor)"
+    [[ "${rc}" == 0 ]] || {
+        printf 'verified snapshot helper descriptor returned %s\n' "${rc}" >&2
+        print_bounded_fixture_evidence "${fixture}"
+        exit 1
+    }
+    printf 'unmapped snapshot encryption helper descriptor is rejected\n'
+    fixture="${temp_root}/rejected-snapshot-crypt-descriptor"
+    make_fixture "${fixture}" active
+    rc="$(run_failure "${fixture}" rejected_snapshot_crypt_descriptor)"
+    [[ "${rc}" == 1 ]] || {
+        printf 'unmapped snapshot helper descriptor returned %s\n' "${rc}" >&2
+        print_bounded_fixture_evidence "${fixture}"
+        exit 1
+    }
+    grep -Fq 'snapshot helper descriptor was not accepted' "${fixture}/installer.log" || {
+        printf 'unmapped snapshot helper descriptor did not fail closed\n' >&2
+        cat "${fixture}/installer.log" >&2
+        exit 1
+    }
     printf 'nftables include-aware fixture fidelity\n'
     assert_fake_nft_contract
     printf 'systemd-sysctl absent/present fixture fidelity\n'

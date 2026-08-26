@@ -161,6 +161,15 @@ release_descriptor_matches() {
     done
     return 1
 }
+release_executable_is_trusted() {
+    local relative="$1" candidate="$2"
+    [[ -x "${candidate}" ]] || return 1
+    if [[ -L "${candidate}" ]]; then
+        release_descriptor_matches "${relative}" "${candidate}"
+        return
+    fi
+    [[ -f "${candidate}" && ! -L "${candidate}" ]]
+}
 ensure_directory() {
     local path="$1" mode="$2"
     if [[ -n "${SYSTEM_ROOT}" ]]; then
@@ -843,7 +852,8 @@ capture_snapshot_payload() {
            -f "${key_id}" && ! -L "${key_id}" && "$(stat -c '%u:%a:%F' "${key_id}")" == "${expected_owner}:600:regular file" ]] \
             || die "missing or unsafe independently provisioned snapshot encryption key"
     fi
-    [[ -x "${helper}" && ! -L "${helper}" ]] || die "snapshot encryption helper is unavailable"
+    release_executable_is_trusted artifacts/pgw-snapshot-crypt "${helper}" \
+        || die "snapshot encryption helper is unavailable"
     [[ "$(<"${key_id}")" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
         || die "snapshot encryption key ID is invalid"
     ledger_name="$(printf '%s' "$(<"${key_id}")" | sha256sum | awk '{print $1}')"
