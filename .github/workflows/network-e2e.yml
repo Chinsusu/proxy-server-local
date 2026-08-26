@@ -254,6 +254,23 @@ jobs:
             echo "product_harness_path=$harness" >> "$evidence/summary.txt"
             echo "product_harness_exit=$harness_rc" >> "$evidence/summary.txt"
 
+            if [[ -d "$product_artifacts" ]]; then
+              unreadable_inventory="$evidence/product-unreadable-artifacts.txt"
+              if ! find "$product_artifacts" -xdev -type f ! -readable -printf '%f\n' \
+                | sort > "$unreadable_inventory"; then
+                echo "product_artifact_tree_readability=FAILED:tree_walk" \
+                  >> "$evidence/summary.txt"
+                harness_rc=1
+              elif [[ -s "$unreadable_inventory" ]]; then
+                IFS= read -r unreadable_artifact < "$unreadable_inventory"
+                echo "product_artifact_tree_readability=FAILED:$unreadable_artifact" \
+                  >> "$evidence/summary.txt"
+                harness_rc=1
+              else
+                echo "product_artifact_tree_readability=PASS" >> "$evidence/summary.txt"
+              fi
+            fi
+
             if [[ "$harness_rc" -eq 0 ]]; then
               artifact_inventory="$evidence/product-artifact-inventory.txt"
               manifest_file="$product_artifacts/product-manifest.txt"
@@ -272,6 +289,8 @@ jobs:
               declare -A product_manifest=()
               if [[ ! -f "$manifest_file" ]]; then
                 evidence_error "missing_manifest"
+              elif [[ ! -r "$manifest_file" ]]; then
+                evidence_error "unreadable_manifest"
               else
                 while IFS='=' read -r key value; do
                   if [[ ! "$key" =~ ^[a-z][a-z0-9_]*$ || -z "$value" ]]; then
@@ -302,7 +321,10 @@ jobs:
                 gateway_wan_veth
                 wan_veth
                 rendered_ruleset
+                base_ruleset
+                dynamic_ruleset
                 applied_ruleset_json
+                applied_ruleset_text
                 counters
                 probe_log
               )
@@ -357,24 +379,32 @@ jobs:
                 fi
               done
 
-              rendered_name="${product_manifest[rendered_ruleset]:-}"
-              ruleset_name="${product_manifest[applied_ruleset_json]:-}"
-              counters_name="${product_manifest[counters]:-}"
-              probe_name="${product_manifest[probe_log]:-}"
-              for artifact_name in "$rendered_name" "$ruleset_name" "$counters_name" "$probe_name"; do
+              artifact_keys=(
+                rendered_ruleset
+                base_ruleset
+                dynamic_ruleset
+                applied_ruleset_json
+                applied_ruleset_text
+                counters
+                probe_log
+              )
+              declare -A product_artifact_files=()
+              for key in "${artifact_keys[@]}"; do
+                artifact_name="${product_manifest[$key]:-}"
                 if [[ -z "$artifact_name" || "$artifact_name" != "$(basename -- "$artifact_name")" ]]; then
-                  evidence_error "invalid_artifact_reference"
+                  evidence_error "invalid_artifact_reference:$key"
                 fi
-              done
-
-              rendered_file="$product_artifacts/$rendered_name"
-              ruleset_file="$product_artifacts/$ruleset_name"
-              counters_file="$product_artifacts/$counters_name"
-              probe_file="$product_artifacts/$probe_name"
-              for artifact_file in "$rendered_file" "$ruleset_file" "$counters_file" "$probe_file"; do
+                artifact_file="$product_artifacts/$artifact_name"
+                product_artifact_files["$key"]="$artifact_file"
                 [[ -f "$artifact_file" && ! -L "$artifact_file" && -s "$artifact_file" ]] || \
                   evidence_error "invalid_artifact_file:$(basename -- "$artifact_file")"
+                [[ -r "$artifact_file" ]] || \
+                  evidence_error "unreadable_artifact_file:$(basename -- "$artifact_file")"
               done
+
+              rendered_file="${product_artifact_files[rendered_ruleset]}"
+              ruleset_file="${product_artifact_files[applied_ruleset_json]}"
+              counters_file="${product_artifact_files[counters]}"
 
               if [[ -f "$rendered_file" ]]; then
                 actual_rendered_sha256="$(sha256sum "$rendered_file" | cut -d' ' -f1)"
