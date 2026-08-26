@@ -1,59 +1,107 @@
+# PGW v2.0 test and acceptance plan
 
-# Test Plan (v1.1)
+> **Evidence boundary:** P0-02 through P0-08 are implemented and covered by
+> repository tests. That is not evidence that a target host has been installed,
+> exercised with client traffic, or promoted. P0-01 remains incomplete and
+> P0-09 remains `BLOCKED_UNPROVISIONED`.
 
-## 1. Unit tests
-- Health checker: simulate HTTP and SOCKS5 success/timeout/auth failure.
-- Agent diff engine: given desired mappings -> emits expected nft changes.
-- JWT middleware and RBAC.
+This plan separates repeatable repository validation from the host/canary
+acceptance that must precede any rollout. It does not authorize deployment or
+production promotion.
 
-## 2. Integration tests (docker)
-- Bring up tinyproxy (http) and dante (socks5).
-- Seed one client 192.168.2.3/32.
-- Verify:
-  - Mapping created -> rules present, tcpdump shows redirect to 127.0.0.1:<port>.
-  - Drop upstream proxy -> Agent switches client to DROP within 1s.
-  - Ensure no packets leave via eth0 when proxy is down (tcpdump -i eth0 host 192.168.2.3 == 0).
+## 1. Repository validation — P0-02 through P0-08
 
-## 3. E2E acceptance
-- UI flows: create/edit/delete proxy; add mapping; latency/exit IP visible.
-- Latency color badges and SSE updates.
-- Block-on-fail acceptance with browser from client VM.
+Run these checks from a clean, unprivileged checkout. Capture the commit SHA,
+tool versions, command output, and any test artifacts with the result.
 
-## 4. Regression and Chaos
-- Restart API -> static base remains fail-close; Agent reports unknown/failed and
-  resumes UDS snapshot reconcile only after API readiness returns.
-- Reboot host -> systemd ensures rules recreated.
-- DB readonly -> agent keeps enforcing last good state.
+```bash
+go vet ./...
+go test -count=1 ./...
+go mod verify
+bash deploy/tests/hardening_test.sh
+```
 
+Repository coverage must include, at minimum:
 
-## 5. Acceptance Criteria (v1.1)
+| ID | P0 outcome | Required repository evidence |
+|---|---|---|
+| T-P0-02 | Enforcement and status | Agent/API/Forwarder tests cover desired state, data-plane state, redacted responses, and no direct control from UI/API to nftables. |
+| T-P0-03 | Immutable base kill-switch | Rules rendering and negative-path tests show the static base policy is separate from dynamic Agent state and UDP/IPv6 remain denied. |
+| T-P0-04 | Generation, reconcile, and LKG | Snapshot hash/generation, ACK, stale-generation, LKG, and recovery tests pass. |
+| T-P0-05 | SQLite and recovery data | Migration, transaction, idempotency, import, backup, restore, and integrity tests pass. |
+| T-P0-06 | Secret handling | AES-256-GCM, credential redaction, and no-secret public response/log/audit tests pass. |
+| T-P0-07 | Observability | Request-ID, route redaction, metrics, and reconcile telemetry tests pass. |
+| T-P0-08 | Hardening | UDS-only Agent access, configuration rejection, privilege/lifecycle contracts, and deployment hardening tests pass. |
 
-1) **No-leak**: With mapped proxy forced DOWN, tcpdump on `eth0` shows **0 packets** from the client IP for 60s window while client generates traffic.
-   - Cmd: `sudo tcpdump -i eth0 host <client_ip> -c 1 -w /tmp/wan_leak.pcap` must **not** capture anything.
-2) **Block-on-fail latency**: From proxy status flip to `DOWN` to client being actively dropped **<1s** (event path) and **<5s** (poll path).
-3) **Health telemetry**: After adding a proxy, `exit_ip` and `latency_ms` are recorded within **≤5s** and displayed in UI.
-4) **Mapping apply gate**: Attempt to map client to an unhealthy proxy is **rejected** by API and **no** nftables rule is created.
-5) **Persistence after reboot**: Reboot host -> within **≤5s** of services startup, nftables rules for all mappings are present.
-6) **Auth**: Viewer cannot mutate resources; Admin can. Passwords stored as Argon2id hashes.
-7) **Scale smoke**: Create **256** mappings; UI stays responsive; Agent reconcile completes in **≤10s** and all listeners exist.
-8) **DNS minimal mode**: UDP/53 from clients is dropped; `dig` from client times out; browsing via proxy still works.
+## 2. Host and canary acceptance — still required
 
-## 6. Test Matrix
+Run these scenarios only on a provisioned canary with preserved out-of-band
+access. Do not treat a developer machine, CI runner, or non-root rehearsal as
+equivalent evidence. Save commands, timestamps, packet captures, rulesets,
+service state, and relevant redacted logs.
 
-| Area | Test ID | Description | Tooling | Pass/Fail |
-|---|---|---|---|---|
-| Enforcement | ENF-001 | PREROUTING redirect per client | nft list ruleset |  |
-| Enforcement | ENF-002 | FORWARD drop LAN->WAN | tcpdump/nft |  |
-| Failover | FAIL-001 | Proxy DOWN -> DROP <1s | curl loop + kill upstream |  |
-| Health | HLTH-001 | Latency/exit IP captured | ipify + UI |  |
-| UI | UI-001 | Add/Edit/Delete mapping flows | Playwright/cypress |  |
-| Auth | AUTH-001 | RBAC admin/viewer | API calls |  |
-| Perf | PERF-001 | 256 mappings overhead | wrk/hey + metrics |  |
-| Ops | OPS-001 | Reboot re-apply | reboot + verify |  |
+| ID | Scenario | Pass condition | P0 link |
+|---|---|---|---|
+| HST-01 | Install/configuration preflight | The target has the intended LAN/WAN interfaces and validated concrete LAN IPv4; invalid or wildcard management binds are rejected. | P0-08 |
+| HST-02 | Mapped client egress | A client mapped to an active `web_only` proxy reaches only TCP/80 and TCP/443 through the configured upstream. The observed result matches API/Agent status. | P0-02 |
+| HST-03 | No direct WAN path | With a proxy, Forwarder, API, or Agent failure, capture shows zero direct client packets on the WAN interface. The base policy remains intact. | P0-03 |
+| HST-04 | Generation/reconcile recovery | Activate, suspend, rotate, and delete mappings; inject a failed apply and restart. Agent verifies or quarantines rather than reporting an unverified state as applied. | P0-04 |
+| HST-05 | Database and recovery data | Perform migration, guarded import, backup, restore, and `PRAGMA integrity_check` against representative canary data. | P0-05 |
+| HST-06 | Credential and redaction review | Confirm systemd credential delivery and inspect API responses, audit records, and logs for absent plaintext proxy passwords. | P0-06 |
+| HST-07 | Observability failure paths | Trigger controlled proxy/reconcile failures and confirm request IDs, bounded error information, metrics, and status transitions. | P0-07 |
+| HST-08 | Privilege and transport negatives | Verify the UI cannot call Agent endpoints, Agent internal API rejects TCP, and unauthorized/invalid configuration requests fail closed. | P0-08 |
 
-## 7. Go/CI Quality Gates
+### Canary evidence checklist
 
-- go test ./... (≥80% coverage on core packages `pkg/nft`, `pkg/check`, `pkg/auth`).
-- golangci-lint run (no critical findings).
-- `make e2e` runs dockerized integration; report artifacts: ruleset, pcap, logs.
-- SAST (gosec) no high issues.
+- [ ] Target identity, interface names, and exact test configuration are recorded.
+- [ ] Client-side egress results are captured separately from control-plane status.
+- [ ] WAN packet capture covers normal, proxy-down, Forwarder-down, API-down,
+  and Agent-down cases.
+- [ ] Full `nft list ruleset`, service state, reconcile state, and redacted
+  logs are attached for each failure scenario.
+- [ ] Database backup/restore evidence includes integrity results and rollback
+  outcome.
+- [ ] A reviewer independent from the executor verifies the evidence.
+
+## 3. P0-01 and P0-09 gates
+
+P0-01 and P0-09 are not satisfied by test execution alone.
+
+| Gate | Required independent evidence | Current state |
+|---|---|---|
+| P0-01 governance | `main` protection, required checks, CODEOWNER policy, and independent reviewer availability are verified in GitHub administration. | Incomplete |
+| P0-09 promotion | Independent external attestor/orchestrator is provisioned; its pinned policy verifies a closed candidate and produces an offline promotion receipt. | `BLOCKED_UNPROVISIONED` |
+
+Repository CI and `deploy/rehearse-release.sh` can create diagnostic candidate
+and non-root rehearsal evidence only. They cannot be cited as a production
+promotion result.
+
+## 4. P1 test design — deferred until P0 is complete
+
+| ID | Future capability | Minimum acceptance tests |
+|---|---|---|
+| P1-01 | `web_only` / TCP allowlist, `all_tcp` off | Positive TCP/80 and TCP/443 tests plus negative non-web TCP, UDP, and IPv6 tests. |
+| P1-02 | `INCOMPATIBLE` vs `DEGRADED` | A policy-capability mismatch is reported as incompatible, never as transient degraded health. |
+| P1-03 | HTTPS adapter and CA/SNI/custom CA | Valid and invalid certificate chains, SNI, custom CA, and no-fallback tests. |
+| P1-04 | SOCKS5 auth, remote DNS, UDP false | Auth success/failure and remote DNS tests; UDP remains positively denied. |
+| P1-05 | MAC/VLAN identity and DNS policy | Identity movement/spoofing and DNS allow/deny tests remain fail-close. |
+| P1-06 | UI validation and egress proof | Invalid policy input is blocked; displayed proof links to independently captured client/packet evidence. |
+
+## 5. Historical v1.1 plan — retained for context only
+
+The following was the old v1.1 test plan. It is not the v2 acceptance contract.
+
+| Area | Historical test ID | Historical description |
+|---|---|---|
+| Enforcement | ENF-001 | PREROUTING redirect per client |
+| Enforcement | ENF-002 | FORWARD drop LAN-to-WAN |
+| Failover | FAIL-001 | Proxy down causes drop within one second |
+| Health | HLTH-001 | Latency and exit IP captured |
+| UI | UI-001 | Add/edit/delete mapping flows |
+| Auth | AUTH-001 | Admin/viewer RBAC |
+| Performance | PERF-001 | 256-mapping overhead |
+| Operations | OPS-001 | Reboot re-apply |
+
+The former v1.1 health-gate timing, SSE/WebSocket expectation, Dockerized E2E
+harness, reboot target, and 256-mapping target require re-approval and v2-safe
+test design before they can become current acceptance criteria.
