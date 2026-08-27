@@ -1912,10 +1912,25 @@ enable_forwarding_after_install() {
 }
 
 restore_forwarders_after_upgrade() {
-    local unit enabled active
+    local unit enabled active instance runtime_config
     while IFS=$'\t' read -r unit enabled active; do
         valid_forwarder_unit "${unit}" || die "invalid saved forwarder instance: ${unit}"
         set_unit_enablement "${unit}" "${enabled}"
+        # A v2 instance only starts against its agent-published runtime
+        # (forwarder.json plus the LoadCredential sources). A v2-to-v2
+        # upgrade preserved that runtime across quiesce, so restarting here
+        # is exact restoration. A legacy migration saves active v1
+        # forwarders but has no v2 runtime yet; blind-starting the new unit
+        # fails at LoadCredential. Defer those instances to the Agent
+        # (restarted immediately after this), which reconciles the imported
+        # mappings and starts them against runtime it publishes itself.
+        instance="${unit#pgw-fwd@}"
+        instance="${instance%.service}"
+        runtime_config="$(host_path "/run/pgw/forwarders/${instance}/forwarder.json")"
+        if [[ "${active}" == active && ! -f "${runtime_config}" ]]; then
+            log "deferring ${unit} start to Agent reconcile (no published v2 runtime)"
+            continue
+        fi
         set_unit_activity "${unit}" "${active}"
         [[ "${active}" != active ]] || verify_process_binary "${unit}" /usr/local/bin/pgw-fwd
     done <"${backup_dir}/forwarders"
