@@ -41,7 +41,10 @@ MemoryDenyWriteExecute=yes
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# AF_NETLINK: the pgw-verify-ui-bind ExecStartPre enumerates the LAN
+# interface's addresses with ip(8), which requires a netlink socket; without
+# it the sandboxed pre-check fails closed and the unit can never start.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
