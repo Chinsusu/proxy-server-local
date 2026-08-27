@@ -17,6 +17,10 @@ func OpenTrustedSource(string) (*os.File, SourceState, error) {
 	return nil, SourceState{}, ErrUnsupported
 }
 
+func OpenTrustedQuiescedSource(string, uint32) (*os.File, SourceState, error) {
+	return nil, SourceState{}, ErrUnsupported
+}
+
 func OpenTrustedCiphertext(string) (*os.File, error) { return nil, ErrUnsupported }
 
 func RecheckSource(*os.File, SourceState) error { return ErrUnsupported }

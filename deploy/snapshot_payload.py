@@ -140,11 +140,16 @@ def _run(command: list[str], context: str) -> tuple[int, dict[str, Any]]:
         command,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
         check=False,
         pass_fds=pass_fds,
     )
+    if result.returncode != 0 and result.stderr:
+        # The helper's JSON receipt carries outcome/exit code but no cause;
+        # its bounded stderr line is the only diagnostic. Never silently
+        # discard it - a failing capture must be explainable from the log.
+        sys.stderr.write(result.stderr[:4096])
     return result.returncode, _json_line(result.stdout, context)
 
 
@@ -348,6 +353,12 @@ def encrypt_object(
         "--input", source, "--output", output, "--snapshot-id",
         expected["snapshot_id"], "--release-id", expected["release_id"],
         "--logical-path", expected["logical_path"], "--source-contract", "quiesced",
+        # Captured service state legitimately lives under service-owned
+        # directories (for example /var/lib/pgw is owned by the API account,
+        # not root). Under the quiesced contract that owner is stopped, so the
+        # helper may trust ancestors owned by the source file's own principal;
+        # root-owned files below service-owned directories remain rejected.
+        "--trusted-ancestor-uid", str(expected["uid"]),
         "--chunk-size", str(expected["chunk_size"]),
     ]
     code, result = _run(command, "snapshot-crypt encrypt")

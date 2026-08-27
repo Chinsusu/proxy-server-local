@@ -112,6 +112,41 @@ func TestRootCallerRejectsForeignOwnedAncestor(t *testing.T) {
 	}
 }
 
+func TestQuiescedSourceTrustsDeclaredAncestorOwnerOnly(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("root ownership boundary requires root")
+	}
+	directory := trustedRootTemp(t)
+	serviceOwned := filepath.Join(directory, "service-state")
+	if err := os.Mkdir(serviceOwned, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(serviceOwned, "state.json")
+	if err := os.WriteFile(source, []byte("snapshot"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(source, 1, -1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(serviceOwned, 1, -1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := OpenTrustedSource(source); err == nil {
+		t.Fatal("strict open accepted a service-owned ancestor")
+	}
+	if _, _, err := OpenTrustedQuiescedSource(source, 2); err == nil {
+		t.Fatal("quiesced open accepted an ancestor outside the declared owner")
+	}
+	file, state, err := OpenTrustedQuiescedSource(source, 1)
+	if err != nil {
+		t.Fatalf("quiesced open rejected the declared service-owned ancestor: %v", err)
+	}
+	defer file.Close()
+	if err := RecheckSource(file, state); err != nil {
+		t.Fatalf("quiesced source identity recheck failed: %v", err)
+	}
+}
+
 func TestTrustedSourceIdentityAndConcurrentMutation(t *testing.T) {
 	directory := trustedRootTemp(t)
 	path := filepath.Join(directory, "source")

@@ -75,8 +75,23 @@ func (state SourceState) Metadata(snapshotID, releaseID, keyID string, keyObject
 // ancestor. Root execution therefore retains the production root-only policy,
 // while an unprivileged caller can safely operate inside its own private tree.
 func OpenTrustedSource(name string) (*os.File, SourceState, error) {
+	return openTrustedSourceFile(name, nil)
+}
+
+// OpenTrustedQuiescedSource additionally accepts path ancestors owned by
+// trustedAncestorUID. Only the encrypt capture path may use this: its trusted
+// root caller asserts --source-contract quiesced, meaning the service
+// principal that owns the captured state tree (for example pgw-api owning
+// /var/lib/pgw) has been stopped and cannot race the walk. Every component
+// and the final open still use O_NOFOLLOW, and the post-read identity
+// recheck is unchanged, so a swapped or replaced source still fails closed.
+func OpenTrustedQuiescedSource(name string, trustedAncestorUID uint32) (*os.File, SourceState, error) {
+	return openTrustedSourceFile(name, &trustedAncestorUID)
+}
+
+func openTrustedSourceFile(name string, trustedAncestorUID *uint32) (*os.File, SourceState, error) {
 	var empty SourceState
-	directory, base, err := openTrustedParentDirectory(name)
+	directory, base, err := openTrustedParentDirectory(name, trustedAncestorUID)
 	if err != nil {
 		return nil, empty, err
 	}
@@ -195,7 +210,7 @@ type ReconciliationHandle struct {
 }
 
 func OpenPublishedForReconciliation(name string) (*ReconciliationHandle, error) {
-	directory, base, err := openTrustedParentDirectory(name)
+	directory, base, err := openTrustedParentDirectory(name, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +318,7 @@ type CiphertextPublisher struct {
 }
 
 func CreateCiphertextPublisher(destination string) (*CiphertextPublisher, error) {
-	directory, base, err := openTrustedParentDirectory(destination)
+	directory, base, err := openTrustedParentDirectory(destination, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +420,7 @@ type PlaintextPublisher struct {
 }
 
 func CreatePlaintextPublisher(destination string) (*PlaintextPublisher, error) {
-	directory, base, err := openTrustedParentDirectory(destination)
+	directory, base, err := openTrustedParentDirectory(destination, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +536,7 @@ func requireAbsentAt(directory int, base string) error {
 	return nil
 }
 
-func openTrustedParentDirectory(name string) (int, string, error) {
+func openTrustedParentDirectory(name string, trustedAncestorUID *uint32) (int, string, error) {
 	if !cleanAbsolutePath(name) || len(name) > maxFilesystemPath {
 		return -1, "", fmt.Errorf("%w: path must be clean and absolute", ErrUnsafePath)
 	}
@@ -534,7 +549,7 @@ func openTrustedParentDirectory(name string) (int, string, error) {
 	if err != nil {
 		return -1, "", err
 	}
-	if err := validateTrustedDirectory(fd); err != nil {
+	if err := validateTrustedDirectory(fd, trustedAncestorUID); err != nil {
 		return -1, "", errors.Join(err, unix.Close(fd))
 	}
 	for _, component := range strings.Split(strings.TrimPrefix(parent, "/"), "/") {
@@ -545,7 +560,7 @@ func openTrustedParentDirectory(name string) (int, string, error) {
 		if openErr != nil {
 			return -1, "", errors.Join(openErr, unix.Close(fd))
 		}
-		if statErr := validateTrustedDirectory(next); statErr != nil {
+		if statErr := validateTrustedDirectory(next, trustedAncestorUID); statErr != nil {
 			return -1, "", errors.Join(statErr, unix.Close(next), unix.Close(fd))
 		}
 		if closeErr := unix.Close(fd); closeErr != nil {
@@ -556,14 +571,16 @@ func openTrustedParentDirectory(name string) (int, string, error) {
 	return fd, base, nil
 }
 
-func validateTrustedDirectory(fd int) error {
+func validateTrustedDirectory(fd int, trustedAncestorUID *uint32) error {
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return err
 	}
 	callerUID := uint32(os.Geteuid())
-	if stat.Mode&unix.S_IFMT != unix.S_IFDIR || (stat.Uid != 0 && stat.Uid != callerUID) || uint32(stat.Mode)&0o022 != 0 {
-		return errors.New("path ancestor must be owned by root or the caller and not group/world-writable")
+	ownerTrusted := stat.Uid == 0 || stat.Uid == callerUID ||
+		(trustedAncestorUID != nil && stat.Uid == *trustedAncestorUID)
+	if stat.Mode&unix.S_IFMT != unix.S_IFDIR || !ownerTrusted || uint32(stat.Mode)&0o022 != 0 {
+		return errors.New("path ancestor must be owned by root, the caller, or the declared quiesced source owner, and not group/world-writable")
 	}
 	return nil
 }
