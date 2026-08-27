@@ -15,7 +15,7 @@ func platformLoadKeyFile(name string) (key Key, resultErr error) {
 	if !cleanAbsolutePath(name) {
 		return key, fmt.Errorf("%w: key path must be clean and absolute", ErrUnsafePath)
 	}
-	directory, base, err := openTrustedParentDirectory(name)
+	directory, base, err := openTrustedParentDirectory(name, nil)
 	if err != nil {
 		return key, fmt.Errorf("open key parent: %w", err)
 	}

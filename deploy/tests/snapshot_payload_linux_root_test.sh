@@ -42,6 +42,43 @@ printf 'present\t/var/lib/pgw\n' >"${snapshot}/manifest"
 find "${snapshot}/objects" -type f -name '*.pgwsnap' -print -quit | grep -q .
 /usr/bin/python3 -I "${ROOT}/deploy/snapshot_payload.py" verify "${snapshot}" "${fixture}/key" "${helper}"
 
+# Production state trees are service-owned (legacy /var/lib/pgw is owned by
+# the API account, not root). Under the quiesced capture contract the helper
+# must accept ancestors owned by the source file's own principal.
+service_root="${fixture}/service-source"
+service_snapshot="${fixture}/service-snapshot"
+install -d -m 0700 "${service_root}/var/lib/pgw" "${service_snapshot}/key-sequences"
+printf 'service-owned-canary\n' >"${service_root}/var/lib/pgw/pgw.db"
+chmod 0640 "${service_root}/var/lib/pgw/pgw.db"
+chown 65534:65534 "${service_root}/var/lib/pgw" "${service_root}/var/lib/pgw/pgw.db"
+printf 'present\t/var/lib/pgw\n' >"${service_snapshot}/manifest"
+/usr/bin/python3 -I "${ROOT}/deploy/snapshot_payload.py" capture \
+    "${service_snapshot}" "${service_root}" "${fixture}/key" key.root.runtime "${helper}" \
+    install.service.owner release.service.owner \
+    "${service_snapshot}/key-sequences/key-sequence-$(printf '%s' key.root.runtime | sha256sum | awk '{print $1}').json"
+/usr/bin/python3 -I "${ROOT}/deploy/snapshot_payload.py" verify "${service_snapshot}" "${fixture}/key" "${helper}"
+
+# A root-owned file below a service-owned directory is exfiltration shaped
+# and must remain rejected: the declared trusted ancestor owner is derived
+# from the file's own uid (0), which does not own the service directory.
+mixed_root="${fixture}/mixed-source"
+mixed_snapshot="${fixture}/mixed-snapshot"
+install -d -m 0700 "${mixed_root}/var/lib/pgw" "${mixed_snapshot}/key-sequences"
+printf 'root-only-material\n' >"${mixed_root}/var/lib/pgw/root-secret"
+chmod 0600 "${mixed_root}/var/lib/pgw/root-secret"
+chown 65534:65534 "${mixed_root}/var/lib/pgw"
+printf 'present\t/var/lib/pgw\n' >"${mixed_snapshot}/manifest"
+set +e
+/usr/bin/python3 -I "${ROOT}/deploy/snapshot_payload.py" capture \
+    "${mixed_snapshot}" "${mixed_root}" "${fixture}/key" key.root.runtime "${helper}" \
+    install.mixed.owner release.mixed.owner \
+    "${mixed_snapshot}/key-sequences/key-sequence-$(printf '%s' key.root.runtime | sha256sum | awk '{print $1}').json" \
+    >/dev/null 2>&1
+mixed_rc=$?
+set -e
+((mixed_rc != 0))
+[[ ! -e "${mixed_snapshot}/payload.manifest.json" ]]
+
 # Wrong-key verification must fail before a private plaintext stage exists.
 printf 'abcdef0123456789abcdef0123456789' >"${fixture}/wrong-key"
 chmod 0600 "${fixture}/wrong-key"

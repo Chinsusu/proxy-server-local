@@ -100,6 +100,14 @@ func emitFailure(arguments []string, err error, stdout, stderr io.Writer) int {
 	if encodeErr := json.NewEncoder(stdout).Encode(payload); encodeErr != nil {
 		fmt.Fprintf(stderr, "snapshot-crypt: result unavailable; outcome=%s exit_code=%d\n", outcome, exitCode)
 	}
+	// The machine-readable receipt above carries no cause. Emit the bounded
+	// error text on stderr so a failing capture is diagnosable from the
+	// caller's log; our error strings never contain key material.
+	message := err.Error()
+	if len(message) > 4096 {
+		message = message[:4096]
+	}
+	fmt.Fprintf(stderr, "snapshot-crypt: %s failed: %s\n", operation, message)
 	return exitCode
 }
 
@@ -132,6 +140,7 @@ func runEncrypt(arguments []string, stdout io.Writer) (resultErr error) {
 	releaseID := flags.String("release-id", "", "release identifier")
 	logicalPath := flags.String("logical-path", "", "canonical logical path")
 	sourceContract := flags.String("source-contract", "", "must be exactly quiesced")
+	trustedAncestorUIDText := flags.String("trusted-ancestor-uid", "", "uid additionally allowed to own quiesced source path ancestors")
 	chunkSize := flags.Uint("chunk-size", uint(snapshotcrypto.DefaultChunkSize), "plaintext bytes per AEAD chunk")
 	if err := parseFlags(flags, arguments, "encrypt"); err != nil {
 		return err
@@ -154,7 +163,19 @@ func runEncrypt(arguments []string, stdout io.Writer) (resultErr error) {
 		return err
 	}
 	defer key.Destroy()
-	input, sourceState, err := snapshotcrypto.OpenTrustedSource(*inputPath)
+	var input *os.File
+	var sourceState snapshotcrypto.SourceState
+	if *trustedAncestorUIDText != "" {
+		// The quiesced contract above is what makes this delegation sound: the
+		// declared owner's services are stopped, so it cannot race the walk.
+		trustedAncestorUID, parseErr := parseUint64(*trustedAncestorUIDText, "trusted-ancestor-uid")
+		if parseErr != nil || trustedAncestorUID > uint64(^uint32(0)) {
+			return errors.New("trusted-ancestor-uid is out of range")
+		}
+		input, sourceState, err = snapshotcrypto.OpenTrustedQuiescedSource(*inputPath, uint32(trustedAncestorUID))
+	} else {
+		input, sourceState, err = snapshotcrypto.OpenTrustedSource(*inputPath)
+	}
 	if err != nil {
 		return fmt.Errorf("open trusted plaintext source: %w", err)
 	}
