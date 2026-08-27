@@ -106,6 +106,15 @@ func main() {
 	if handled, err := localCommand(os.Args[1:], os.Stdout); handled {
 		if err != nil {
 			observability.New("pgw-agent", os.Stderr).Logger.Log(context.Background(), "error", "agent_local_command_failed", map[string]any{"reason_code": "invalid_configuration"})
+			// The structured line above carries only a generic reason code;
+			// without the bounded cause a failing verify-base is
+			// undiagnosable from the caller's log. Errors here never
+			// contain secrets.
+			message := err.Error()
+			if len(message) > 4096 {
+				message = message[:4096]
+			}
+			fmt.Fprintf(os.Stderr, "pgw-agent: %s failed: %s\n", os.Args[1], message)
 			os.Exit(2)
 		}
 		return
