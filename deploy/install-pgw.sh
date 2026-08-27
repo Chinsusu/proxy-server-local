@@ -2014,8 +2014,12 @@ main() {
     done
     validate_fixed_python
     prepare_lifecycle_roots
-    exec 9>"${LIFECYCLE_LOCK}"
-    flock -n 9 || die "another PGW lifecycle operation is running"
+    # The trusted launcher hands this process release descriptors starting at
+    # fd 3; a hardcoded low lock fd silently replaced one of them (fd 9 was
+    # deploy/install-pgw-base.sh, so the installed file became the empty lock
+    # inode). Let bash allocate an unused descriptor instead.
+    exec {lifecycle_lock_fd}>"${LIFECYCLE_LOCK}"
+    flock -n "${lifecycle_lock_fd}" || die "another PGW lifecycle operation is running"
     validate_rollback_snapshot "${rollback_request}"
     trap - EXIT
     set +e
@@ -2039,8 +2043,12 @@ main() {
     fi
     validate_host
     prepare_lifecycle_roots
-    exec 9>"${LIFECYCLE_LOCK}"
-    flock -n 9 || die "another PGW lifecycle operation is running"
+    # The trusted launcher hands this process release descriptors starting at
+    # fd 3; a hardcoded low lock fd silently replaced one of them (fd 9 was
+    # deploy/install-pgw-base.sh, so the installed file became the empty lock
+    # inode). Let bash allocate an unused descriptor instead.
+    exec {lifecycle_lock_fd}>"${LIFECYCLE_LOCK}"
+    flock -n "${lifecycle_lock_fd}" || die "another PGW lifecycle operation is running"
     # A journal-bearing interrupted migration is cleaned inside recovery only
     # after its snapshot restore, so its durable authentication marker spans
     # every plaintext cleanup. Ordinary startup may clean a stale report.
