@@ -1265,6 +1265,7 @@ done
   }
   grep -Fq 'resource_limit: max_depth' "${fixture}/installer.log"
   grep -Fq 'recovering pre-ready capture from service/runtime state only' "${fixture}/installer.log"
+  grep -Fxq 'api-ready-before-forwarder' "${fixture}/commands.log"
   ! grep -Fq 'automatic rollback was partial or failed' "${fixture}/installer.log"
   diff -r --no-dereference "${fixture}/expected-system" "${fixture}/system"
   diff -r --no-dereference "${fixture}/expected-runtime" "${fixture}/runtime"

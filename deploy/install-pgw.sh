@@ -622,6 +622,25 @@ wait_unit_stopped() {
     done
 }
 
+wait_for_legacy_api_listener() {
+    local deadline=$((SECONDS + 15))
+    # A legacy Forwarder fetches its upstream configuration from the v1 API at
+    # startup. systemctl considers the API active before its listener is
+    # necessarily bound, so restoring a Forwarder immediately can make it exit
+    # and turn an otherwise recoverable snapshot rollback into a partial one.
+    if ((installer_sourced)); then
+        "${PGW_INSTALL_TEST_COMMAND}" wait-api-ready
+        return
+    fi
+    while ((SECONDS < deadline)); do
+        if (exec 9<>/dev/tcp/127.0.0.1/8080) 2>/dev/null; then
+            return
+        fi
+        sleep 1
+    done
+    die "legacy API listener did not become ready before Forwarder restore"
+}
+
 quiesce_runtime() {
     local unit
     if systemctl is-active --quiet pgw-agent.service; then
@@ -1345,6 +1364,10 @@ restore_saved_runtime_state() {
     for service in pgw-api.service; do
         set_unit_activity "${service}" "$(saved_service_field "${service}" 3)"
     done
+    if awk -F '\t' '$3 == "active" {found=1} END {exit !found}' "${backup_dir}/forwarders"; then
+        verify_process_binary pgw-api.service /usr/local/bin/pgw-api
+        wait_for_legacy_api_listener
+    fi
     while IFS=$'\t' read -r unit enabled active; do
         set_unit_activity "${unit}" "${active}"
         [[ "${active}" != active ]] || verify_process_binary "${unit}" /usr/local/bin/pgw-fwd
