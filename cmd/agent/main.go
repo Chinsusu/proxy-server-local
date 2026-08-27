@@ -234,7 +234,16 @@ func localCommand(args []string, output io.Writer) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	cfg := cfgAgent{LANIF: ag.LANIF, WANIF: ag.WANIF, ManagementPorts: managementPorts}
+	// The live-ruleset check compares pgw_dynamic's prerouting redirects and
+	// its terminal input drop against this forwarder port range; a zero
+	// value would demand a 0-0 range and reject every valid dynamic table.
+	cfg := cfgAgent{
+		LANIF:           ag.LANIF,
+		WANIF:           ag.WANIF,
+		ManagementPorts: managementPorts,
+		FwdBase:         envPort("PGW_FWD_BASE_PORT", nft.DefaultForwarderPortStart),
+		FwdMax:          envPort("PGW_FWD_MAX_PORT", nft.DefaultForwarderPortEnd),
+	}
 	verify := verifyBaseFirewall
 	message := "verified exact fail-close nftables base table"
 	if args[0] == "verify-boot-base" {
