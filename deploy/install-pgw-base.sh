@@ -238,6 +238,9 @@ service_runtime_before="$(mktemp)"
 capture_service_links /etc/systemd/system "${service_persistent_before}"
 capture_service_links /run/systemd/system "${service_runtime_before}"
 
+# Progress marks bound every silent bare-command interval: an errexit death
+# in this script must be attributable to one step from the caller's log.
+printf '[pgw-install-base] preflight passed; rendering base ruleset\n'
 candidate="$(mktemp)"
 "${agent_binary}" render-base \
     --lan "${lan_interface}" \
@@ -266,6 +269,7 @@ saved_forwarding="$(sysctl -n net.ipv4.ip_forward)"
 [[ "${saved_forwarding}" == 0 || "${saved_forwarding}" == 1 ]] \
     || { printf 'invalid IPv4 forwarding state\n' >&2; exit 1; }
 force_forwarding_off || { printf 'could not force IPv4 forwarding off before nft mutation\n' >&2; exit 1; }
+printf '[pgw-install-base] candidate validated; applying live base table\n'
 nft -f "${apply_file}"
 live_changed=1
 
@@ -286,6 +290,7 @@ for object in \
     nft list "${object_kind}" inet "${BASE_TABLE}" "${object_name}" >/dev/null
 done
 
+printf '[pgw-install-base] live base verified; persisting boot configuration\n'
 install -d -m 0755 /etc/nftables.d
 persisted_stage="$(mktemp /etc/nftables.d/.pgw-base.nft.XXXXXX)"
 install -m 0644 "${candidate}" "${persisted_stage}"
