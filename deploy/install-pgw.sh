@@ -934,8 +934,24 @@ remove_snapshot_validation_stage_for_snapshot() {
     remove_snapshot_stage "${stage}"
 }
 
+ensure_runtime_stage_root() {
+    # Snapshot stages live under /run/pgw, but a legacy host reaches capture
+    # validation before any v2 install phase has run systemd-tmpfiles, and
+    # /run is a tmpfs cleared on every boot, so post-reboot recovery can also
+    # start without the v2 runtime root. Create exactly the
+    # deploy/tmpfiles.d/pgw.conf contract for /run/pgw before staging below
+    # it; the sourced harness's install shim keeps this caller-owned.
+    local runtime_root
+    runtime_root="$(host_path /run/pgw)"
+    if [[ ! -e "${runtime_root}" && ! -L "${runtime_root}" ]]; then
+        install -d -o root -g root -m 0755 "${runtime_root}" || return 1
+    fi
+    [[ -d "${runtime_root}" && ! -L "${runtime_root}" ]] || return 1
+}
+
 validate_captured_snapshot_recoverability() {
     local snapshot_name stage key helper rc=0 cleanup_rc=0
+    ensure_runtime_stage_root || return 1
     [[ -n "${backup_dir}" && "${backup_dir}" == "${BACKUP_ROOT}"/install.* && \
        -d "${backup_dir}" && ! -L "${backup_dir}" ]] || return 1
     snapshot_name="$(basename -- "${backup_dir}")"
@@ -1105,6 +1121,7 @@ restore_snapshot() {
     verify_snapshot payload || return 1
     key="$(host_path /etc/pgw/snapshot-encryption.key)"
     helper="$(release_file artifacts/pgw-snapshot-crypt)"
+    ensure_runtime_stage_root || return 1
     restore_stage="$(host_path "/run/pgw/snapshot-restore.$(basename -- "${backup_dir}")")"
     snapshot_restore_stage="${restore_stage}"
     ((installer_sourced)) && expected_uid="${EUID}"
@@ -1694,6 +1711,7 @@ import_legacy_state() {
     ((legacy_state_pending)) || return 0
     local live_state sealed_state sealed_stage database key snapshot_key helper api_binary runtime_dir report_temp report_identity report runtime_uid
     live_state="$(host_path /var/lib/pgw/state.json)"
+    ensure_runtime_stage_root || die "v2 runtime staging root is unavailable for legacy import"
     sealed_stage="$(host_path "/run/pgw/legacy-sealed.$(basename -- "${backup_dir}")")"
     legacy_sealed_stage="${sealed_stage}"
     sealed_state="${sealed_stage}/files/var/lib/pgw/state.json"
