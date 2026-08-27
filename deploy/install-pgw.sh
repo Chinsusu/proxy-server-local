@@ -1290,7 +1290,13 @@ restore_nft_runtime() {
         die "nft runtime semantic restore mismatch"
     }
     rm -f -- "${current_ruleset}"
-    verify_base_semantics
+    # A state-only recovery can restore a legacy runtime captured before the
+    # immutable base table existed. Exact ruleset equality is the invariant for
+    # that rollback; require current base semantics only when the snapshot had
+    # a base table to verify.
+    if grep -Fq 'table inet pgw_base' "${backup_dir}/runtime-ruleset.nft"; then
+        verify_base_semantics
+    fi
     force_forwarding_off
 }
 
@@ -1303,7 +1309,9 @@ verify_saved_ruleset() {
         return 1
     fi
     rm -f -- "${current_ruleset}"
-    verify_base_semantics
+    if grep -Fq 'table inet pgw_base' "${backup_dir}/runtime-ruleset.nft"; then
+        verify_base_semantics
+    fi
 }
 
 verify_base_semantics() {
