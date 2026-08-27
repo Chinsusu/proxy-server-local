@@ -1240,6 +1240,11 @@ done
   printf 'capture resource boundary: depth/state-only recovery\n'
   fixture="${temp_root}/capture-resource-depth"
   make_fixture "${fixture}" active
+  # The gateway can still have a v1 ruleset when capture starts. State-only
+  # recovery must restore that exact legacy state instead of requiring a v2
+  # base table that was never present in the snapshot.
+  printf 'table ip pgw { chain legacy { } }\n' >"${fixture}/runtime/ruleset.nft"
+  cp -- "${fixture}/runtime/ruleset.nft" "${fixture}/expected-runtime/ruleset.nft"
   deep_path="${fixture}/system/var/lib/pgw"
   for depth_index in $(seq 1 35); do
       deep_path="${deep_path}/d${depth_index}"
