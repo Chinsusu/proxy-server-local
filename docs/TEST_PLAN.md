@@ -61,15 +61,16 @@ service state, and relevant redacted logs.
   logs are attached for each failure scenario.
 - [ ] Database backup/restore evidence includes integrity results and rollback
   outcome.
-- [ ] A reviewer independent from the executor verifies the evidence.
+- [ ] The maintainer re-checks the evidence in a separate verification pass
+  from execution, and retains it.
 
 ## 3. P0-01 and P0-09 gates
 
 P0-01 and P0-09 are not satisfied by test execution alone.
 
-| Gate | Required independent evidence | Current state |
+| Gate | Required evidence | Current state |
 |---|---|---|
-| P0-01 governance | `main` protection, required checks, CODEOWNER policy, and independent reviewer availability are verified in GitHub administration. | Incomplete |
+| P0-01 governance | `main` protection and required status checks are verified in GitHub administration and the evidence retained. | Incomplete |
 | P0-09 promotion | Independent external attestor/orchestrator is provisioned; its pinned policy verifies a closed candidate and produces an offline promotion receipt. | `BLOCKED_UNPROVISIONED` |
 
 Repository CI and `deploy/rehearse-release.sh` can create diagnostic candidate
@@ -103,5 +104,5 @@ The following was the old v1.1 test plan. It is not the v2 acceptance contract.
 | Operations | OPS-001 | Reboot re-apply |
 
 The former v1.1 health-gate timing, SSE/WebSocket expectation, Dockerized E2E
-harness, reboot target, and 256-mapping target require re-approval and v2-safe
+harness, reboot target, and 256-mapping target require re-validation and v2-safe
 test design before they can become current acceptance criteria.

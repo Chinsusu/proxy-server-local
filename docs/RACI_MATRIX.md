@@ -1,14 +1,19 @@
-
 # RACI Matrix (v1.1)
 
-| Workstream | PM | Tech Lead | Backend | Agent | UI | QA | DevOps |
-|---|---|---|---|---|---|---|---|
-| Requirements & Scope Lock | A | C | I | I | I | C | I |
-| API Design & DB Schema | C | A | R | C | C | C | I |
-| Health Service | I | C | R | C | I | C | I |
-| Agent (nftables) | I | C | C | A/R | I | C | C |
-| UI (HTMX/Tailwind) | I | C | C | I | A/R | C | I |
-| Deployment (Docker/systemd) | I | C | I | C | I | C | A/R |
-| Testing & QA | C | C | R | R | R | A | C |
-| Security & Secrets | C | A | R | R | R | C | R |
-| Release/Tagging | A | C | I | I | I | C | C |
+This is a personal, single-maintainer project: one person is Responsible and
+Accountable for every workstream (requirements, API/DB design, health
+service, Agent/nftables, UI, deployment, testing, security, release). A
+role matrix would only restate that on every row, so this file records the
+governance model instead of a table.
+
+The separations that actually protect this system are process and
+trust-domain separations, not people separations:
+
+- The Agent alone owns dynamic nftables state; the installer alone owns the
+  static base table; neither crosses into the other's objects.
+- Release trust is anchored outside CI (the external attestor trust domain,
+  provisioned by the maintainer but independent of the repo and its
+  workflows) - see RELEASE_TRUST.md.
+- Machine gates (required status checks, hardening contracts, secret scan,
+  rehearsal evidence) gate every change; none of them require a second
+  person.

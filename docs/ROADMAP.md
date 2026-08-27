@@ -15,7 +15,7 @@ lifecycle; the Agent does.
 
 | ID | Outcome | Current repository state | Release gate |
 |---|---|---|---|
-| P0-01 | Governance, baseline, and CI | **Incomplete.** CI and contribution controls exist in the repository, but `main` is not evidenced as protected and independent reviewers are not provisioned. | Configure and verify branch protection, CODEOWNERS/reviewer independence, and required checks outside this repository. |
+| P0-01 | Governance, baseline, and CI | **Incomplete.** CI and contribution controls exist in the repository, but `main` protection is not yet evidenced. | Configure and verify branch protection and required checks in GitHub administration; retain the evidence. |
 | P0-02 | Enforcement and honest status | **Implemented and repository-tested.** Agent-owned redirects, Forwarders, data-plane state, and UI/API status are present. | Run host/canary traffic tests and record the observed status. |
 | P0-03 | Immutable base kill-switch | **Implemented and repository-tested.** Static base policy is separate from Agent dynamic state and remains fail-close. | Verify on the target host that service loss never opens LAN-to-WAN forwarding. |
 | P0-04 | Generation, reconcile, and LKG | **Implemented and repository-tested.** Immutable snapshots, hash/generation checks, ACKs, LKG, and recovery journal are present. | Exercise apply, failure, restart, and recovery on a canary host. |
@@ -29,10 +29,12 @@ lifecycle; the Agent does.
 
 P0 is complete only when all of the following are true:
 
-- P0-01 governance controls are independently verified.
+- P0-01 governance controls are verified and the evidence retained.
 - P0-02 through P0-08 have current host/canary acceptance evidence, including
   fail-close and no-direct-WAN tests.
-- P0-09 is no longer `BLOCKED_UNPROVISIONED` and an independent authority has
+- P0-09 is no longer `BLOCKED_UNPROVISIONED` and the external attestor (a
+  separate trust domain the maintainer provisions, independent of this
+  repository and its CI - not a second person) has
   verified a promotion. A local candidate, CI artifact, rehearsal, or a
   documentation change is not a promotion.
 

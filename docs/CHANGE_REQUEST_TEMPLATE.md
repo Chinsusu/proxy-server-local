@@ -1,14 +1,15 @@
-
 # Change Request (CR)
 
+Single-maintainer project: a CR is the maintainer's own recorded decision,
+not a request to an approver. Fill it in before non-trivial changes so the
+reasoning survives.
+
 - Title:
-- Requestor:
 - Date:
 - Summary of change:
-- Reason / Business justification:
+- Reason / justification:
 - Affected docs/components:
 - Out-of-scope/Alternatives considered:
 - Risk assessment:
 - Rollback plan:
-- Decision (Approved/Rejected):
-- Approver(s):
+- Decision and rationale:
