@@ -1460,6 +1460,17 @@ install_accounts_and_paths() {
     systemd-sysusers "${sysusers_config}"
     atomic_install_file "$(release_file deploy/tmpfiles.d/pgw.conf)" "${tmpfiles_config}" root root 0644
     systemd-tmpfiles --create "${tmpfiles_config}"
+    if ((!installer_sourced)); then
+        # systemd-tmpfiles 'd' entries create missing directories but never
+        # correct an existing tree. A legacy host's /var/lib/pgw is owned by
+        # the old pgw account; the v2 Agent's trusted-path walk and
+        # verify_installation both reject that ancestor, so converge the
+        # state root exactly to the deploy/tmpfiles.d/pgw.conf contract.
+        # Rollback fidelity is unaffected: the sealed snapshot records and
+        # restores the original ownership.
+        chown pgw-api:pgw-control "$(host_path /var/lib/pgw)"
+        chmod 0750 "$(host_path /var/lib/pgw)"
+    fi
 }
 
 atomic_install_file() {
