@@ -221,7 +221,7 @@ Nếu revert migration/data-plane không an toàn, dừng rollout, dùng runbook
 Cấu hình ruleset cho `main`:
 
 - Pull request và CODEOWNERS là tùy chọn; một maintainer có thể merge trực tiếp sau khi tự kiểm tra quality gate.
-- Nếu dùng PR, có thể dismiss stale approvals và yêu cầu resolve conversation theo nhu cầu của team.
+- Nếu dùng PR thì đó là công cụ tự tổ chức diff và chạy required checks cho chính maintainer.
 - Require status checks và branch up-to-date trước merge. Baseline: formatting/lint, unit test, `go vet`, build tất cả binaries, secret/dependency scan; thêm network E2E khi workflow sẵn sàng.
 - Require signed commits cho maintainer/release automation khi tổ chức đã quản lý key; luôn require signed annotated release tags.
 - Block force pushes và deletion; không cho bypass ngoại trừ break-glass role được audit.

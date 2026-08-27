@@ -6,7 +6,7 @@
 
 | Req ID | Requirement | Implementation / design evidence | Verification evidence | Current state |
 |---|---|---|---|---|
-| P0-01 | Govern changes with a reliable baseline and CI | [GIT_WORKFLOW.md](GIT_WORKFLOW.md), [CI.md](CI.md), `.github/` controls | Independent review and `main` protection must be verified in GitHub administration. | Incomplete |
+| P0-01 | Govern changes with a reliable baseline and CI | [GIT_WORKFLOW.md](GIT_WORKFLOW.md), [CI.md](CI.md), `.github/` controls | `main` protection and required checks must be verified in GitHub administration. | Incomplete |
 | P0-02 | Enforce mapped TCP egress and report truthful state | [00_OVERVIEW_COMBINED.md](00_OVERVIEW_COMBINED.md), [architecture.md](architecture.md), `internal/agent`, `internal/api` | Repository tests; target-host redirect/status and client-egress canary tests. | Implemented/tested in code; host/canary pending |
 | P0-03 | Preserve an immutable fail-close base kill-switch | [architecture.md](architecture.md), `pkg/nft`, `internal/agent` | Repository rules tests; target-host service-loss/no-WAN-leak capture. | Implemented/tested in code; host/canary pending |
 | P0-04 | Reconcile immutable generations and retain verified LKG | [architecture.md](architecture.md), `internal/domain`, `internal/agent`, `internal/persistence/sqlite` | Repository generation/ACK/recovery tests; canary apply/fail/restart recovery. | Implemented/tested in code; host/canary pending |

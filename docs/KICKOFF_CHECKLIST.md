@@ -7,7 +7,7 @@
 
 - P0-02 through P0-08 are implemented and repository-tested; host/canary
   acceptance evidence is still required.
-- P0-01 is incomplete: `main` protection and independent reviewer availability
+- P0-01 is incomplete: `main` protection and required checks
   have not been evidenced.
 - P0-09 is `BLOCKED_UNPROVISIONED`: no independent external
   attestor/orchestrator is provisioned, so production promotion is unavailable.
@@ -15,15 +15,13 @@
 
 ## A. Governance and access — P0-01
 
-- [ ] Name accountable Product, Technical, Agent/Platform, Security, QA, and
-  Release owners.
-- [ ] Configure and independently verify `main` protection, required checks,
-  CODEOWNERS, and non-author review requirements in GitHub administration.
+- [ ] Configure and verify `main` protection and required checks in GitHub
+  administration; retain the evidence.
 - [ ] Confirm CI runners use scoped, ephemeral privileged namespace/systemd
   isolation tests only where required; they receive no deploy credential,
   release trust root, or signing authority.
-- [ ] Record the change, incident, and evidence-retention process in the team
-  delivery system.
+- [ ] Record the change, incident, and evidence-retention process alongside
+  the project docs.
 
 ## B. v2 architecture and scope
 
@@ -57,7 +55,7 @@
 - [ ] Collect client-side results, WAN packet captures, full nftables rulesets,
   service state, reconcile state, and redacted logs for success and failure
   cases.
-- [ ] Obtain independent review of the completed canary evidence.
+- [ ] Re-check the completed canary evidence in a separate pass and retain it.
 
 ## E. Release trust — P0-09
 

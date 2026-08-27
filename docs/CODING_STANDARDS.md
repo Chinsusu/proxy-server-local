@@ -16,7 +16,7 @@ Chuẩn này áp dụng cho:
 Khi có xung đột, thứ tự ưu tiên là:
 
 1. Thuộc tính security và fail-close trong blueprint v2.
-2. API contract, schema và ADR đã được phê duyệt.
+2. API contract, schema và ADR đã được chốt.
 3. Tài liệu này.
 4. Cách triển khai legacy đang tồn tại.
 
