@@ -1861,19 +1861,29 @@ install_units_and_policy() {
 }
 
 install_firewall_and_sysctl() {
-    local nftables_config sysctl_config
+    local nftables_config sysctl_config base_rc=0
     nftables_config="$(host_path /etc/nftables.conf)"
     sysctl_config="$(host_path /etc/sysctl.d/99-pgw.conf)"
     force_forwarding_off
+    # Each step logs before it runs and pgw-install-base's exit code is
+    # captured explicitly: a silent zero paired with a missing persisted
+    # ruleset must be attributable from the log, not reverse-engineered.
+    log "firewall: installing static base via pgw-install-base"
     if ((installer_sourced)); then
         "${PGW_INSTALL_TEST_COMMAND}" install-base "${validated_test_root}" "${backup_dir}" \
             "${lan_interface}" "${wan_interface}" "${management_ports}"
     else
-        /usr/local/sbin/pgw-install-base --lan "${lan_interface}" --wan "${wan_interface}" --management-ports "${management_ports}"
+        /usr/local/sbin/pgw-install-base --lan "${lan_interface}" --wan "${wan_interface}" --management-ports "${management_ports}" || base_rc=$?
+        ((base_rc == 0)) || die "pgw-install-base failed with exit code ${base_rc}"
+        [[ -f "$(host_path /etc/nftables.d/pgw-base.nft)" ]] \
+            || die "pgw-install-base exited 0 without persisting /etc/nftables.d/pgw-base.nft"
     fi
+    log "firewall: installing boot nftables and sysctl configuration"
     atomic_install_file "$(release_file deploy/nftables.conf)" "${nftables_config}" root root 0644
     atomic_install_file "$(release_file deploy/sysctl-pgw.conf)" "${sysctl_config}" root root 0644
+    log "firewall: validating boot configuration"
     nft -c -f "${nftables_config}"
+    log "firewall: enabling and restarting nftables"
     systemctl enable nftables.service pgw-api.service pgw-agent.service pgw-ui.service pgw-health.service
     systemctl restart nftables.service
     verify_base_semantics
@@ -1956,6 +1966,9 @@ verify_ui_http_smoke() {
 
 execute_install_phase() {
     local phase="$1"
+    # Every phase logs its boundaries so a bare-command errexit death (which
+    # prints no die message) is still attributable to one module from the log.
+    log "phase ${phase}: starting"
     case "${phase}" in
         after_accounts) install_accounts_and_paths ;;
         after_binaries) install_binaries ;;
@@ -1973,6 +1986,7 @@ execute_install_phase() {
             ;;
         *) die "unknown install transaction phase: ${phase}" ;;
     esac
+    log "phase ${phase}: complete"
 }
 
 run_install_transaction() {
