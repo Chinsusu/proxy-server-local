@@ -822,6 +822,12 @@ case "$(basename -- "$0")" in
             verify-base)
                 grep -q 'table inet pgw_base' "${root}/runtime/ruleset.nft"
                 ;;
+            wait-api-ready)
+                [[ "$(field pgw-api.service 3)" == active ]] || exit 2
+                awk -F '\t' '$1 ~ /^pgw-fwd@[0-9]+\.service$/ && $3 == "active" {found=1} END {exit found}' \
+                    "${root}/runtime/services" || exit 2
+                printf 'api-ready-before-forwarder\n' >>"${root}/commands.log"
+                ;;
             *) exit 2 ;;
         esac
         ;;
