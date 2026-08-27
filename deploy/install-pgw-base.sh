@@ -273,6 +273,21 @@ printf '[pgw-install-base] candidate validated; applying live base table\n'
 nft -f "${apply_file}"
 live_changed=1
 
+# A legacy migration reaches this point with the superseded v1 tables still
+# loaded. Forwarding is already forced off and pgw_base now provides the
+# fail-close guards, so removing them here is safe - and required, because
+# verify-base enforces a full-ruleset allowlist permitting only
+# pgw_base/pgw_dynamic. On any later failure the caller's transaction
+# rollback restores the exact saved runtime ruleset, legacy tables included.
+for legacy_table in 'ip pgw' 'inet pgw_filter'; do
+    read -r legacy_family legacy_name <<<"${legacy_table}"
+    if nft list table "${legacy_family}" "${legacy_name}" >/dev/null 2>&1; then
+        printf '[pgw-install-base] removing superseded legacy table %s %s\n' \
+            "${legacy_family}" "${legacy_name}"
+        nft delete table "${legacy_family}" "${legacy_name}"
+    fi
+done
+
 PGW_LAN_IFACE="${lan_interface}" PGW_WAN_IFACE="${wan_interface}" \
     PGW_MANAGEMENT_TCP_PORTS="${management_ports}" "${agent_binary}" verify-base >/dev/null
 
