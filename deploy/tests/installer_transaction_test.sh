@@ -145,7 +145,7 @@ make_fixture() {
         "${system}/run/pgw"
     )
     install -d \
-        "${system}/var/lib/pgw/rules" "${system}/var/lib/pgw-lifecycle" "${system}/etc/pgw" \
+        "${system}/var/lib/pgw-agent" "${system}/var/lib/pgw-lifecycle" "${system}/etc/pgw" \
         "${system}/run/pgw/control" "${system}/run/pgw/forwarders/15001/credentials" \
         "${system}/usr/local/bin" "${system}/usr/local/sbin" \
         "${system}/usr/local/share/pgw/web/static" "${system}/proc" \
@@ -168,7 +168,7 @@ make_fixture() {
         chmod 0700 "${fixture}/fake-bin/${fake}" 2>/dev/null || true
     done
     printf 'old-db\n' >"${system}/var/lib/pgw/pgw.db"
-    printf 'old-lkg\n' >"${system}/var/lib/pgw/rules/lkg.nft"
+    printf 'old-lkg\n' >"${system}/var/lib/pgw-agent/lkg.nft"
     install -d "${system}/var/lib/pgw/nested"
     printf 'old-nested-one\n' >"${system}/var/lib/pgw/nested/one"
     printf 'old-nested-two\n' >"${system}/var/lib/pgw/nested/two"

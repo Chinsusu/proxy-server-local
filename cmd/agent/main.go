@@ -95,7 +95,7 @@ func loadCfg() (cfgAgent, error) {
 		CredentialSocket: envString("PGW_AGENT_SOCKET", "/run/pgw/api-agent.sock"),
 		TokenFile:        tokenFile,
 		RuntimeRoot:      envString("PGW_FORWARDER_RUNTIME_ROOT", "/run/pgw/forwarders"),
-		LKGDirectory:     envString("PGW_LKG_DIRECTORY", "/var/lib/pgw/rules"),
+		LKGDirectory:     envString("PGW_LKG_DIRECTORY", "/var/lib/pgw-agent"),
 		LANAddress:       parsedLANAddress.String(),
 		ReadyTimeout:     envDuration("PGW_FWD_READY_TIMEOUT", 15*time.Second),
 		DrainTimeout:     envDuration("PGW_FWD_DRAIN_TIMEOUT", 30*time.Second),

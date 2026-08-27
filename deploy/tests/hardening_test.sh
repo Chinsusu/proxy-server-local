@@ -102,7 +102,7 @@ for unit in pgw-agent.service pgw-fwd@.service pgw-health.service; do
 done
 
 assert_contains "${ROOT}/deploy/sysusers.d/pgw.conf" 'm pgw-agent       pgw-fwd'
-assert_contains "${ROOT}/deploy/tmpfiles.d/pgw.conf" 'd /var/lib/pgw/rules           0750 pgw-agent pgw-agent'
+assert_contains "${ROOT}/deploy/tmpfiles.d/pgw.conf" 'd /var/lib/pgw-agent           0750 pgw-agent pgw-agent'
 assert_contains "${ROOT}/deploy/tmpfiles.d/pgw.conf" 'd /run/pgw/forwarders          0750 pgw-agent pgw-fwd'
 assert_contains "${ROOT}/deploy/tmpfiles.d/pgw.conf" 'd /etc/pgw/credential-generations 0700 root   root'
 assert_contains "${ROOT}/deploy/tmpfiles.d/pgw.conf" 'z /etc/pgw/snapshot.hmac       0600 root      root'

@@ -415,7 +415,7 @@ fake_stat() {
         case "${path#${root}/system}" in
             /usr/local/bin/pgw-*) printf 'root:root:755\n'; return ;;
             /var/lib/pgw) printf 'pgw-api:pgw-control:750\n'; return ;;
-            /var/lib/pgw/rules) printf 'pgw-agent:pgw-agent:750\n'; return ;;
+            /var/lib/pgw-agent) printf 'pgw-agent:pgw-agent:750\n'; return ;;
             /run/pgw/forwarders) printf 'pgw-agent:pgw-fwd:750\n'; return ;;
             /usr/local/share/pgw/web) printf 'pgw-ui:pgw-ui:550\n'; return ;;
         esac

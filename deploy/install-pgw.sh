@@ -1072,7 +1072,7 @@ capture_state() {
         /etc/pgw/pgw.env /etc/pgw/jwt_secret /etc/pgw/agent.token /etc/pgw/secrets.key \
         /etc/pgw/admin_pass_hash /etc/pgw/credential-generations /etc/pgw/credentials-current \
         /etc/pgw/credential-inbox /etc/pgw/ui.crt /etc/pgw/ui.key /etc/pgw/ui_proxy_token \
-        /var/lib/pgw /run/pgw/forwarders /run/pgw/agent-rollback \
+        /var/lib/pgw /var/lib/pgw-agent /run/pgw/forwarders /run/pgw/agent-rollback \
         /etc/nftables.conf /etc/nftables.d/pgw-base.nft \
         /etc/sysctl.d/99-pgw.conf /etc/sysusers.d/pgw.conf /etc/tmpfiles.d/pgw.conf \
         /etc/polkit-1/rules.d/50-pgw-agent-forwarder.rules /etc/sudoers.d/pgw \
@@ -1197,7 +1197,7 @@ PY
             /usr/local/share/pgw/web|/etc/pgw/pgw.env|/etc/pgw/jwt_secret|\
             /etc/pgw/agent.token|/etc/pgw/secrets.key|/etc/pgw/admin_pass_hash|\
             /etc/pgw/credential-generations|/etc/pgw/credentials-current|/etc/pgw/credential-inbox|\
-            /etc/pgw/ui.crt|/etc/pgw/ui.key|/etc/pgw/ui_proxy_token|/var/lib/pgw|\
+            /etc/pgw/ui.crt|/etc/pgw/ui.key|/etc/pgw/ui_proxy_token|/var/lib/pgw|/var/lib/pgw-agent|\
             /run/pgw/forwarders|/run/pgw/agent-rollback|\
             /etc/nftables.conf|/etc/nftables.d/pgw-base.nft|/etc/sysctl.d/99-pgw.conf|\
             /etc/sysusers.d/pgw.conf|/etc/tmpfiles.d/pgw.conf|\
@@ -1964,7 +1964,7 @@ verify_installation() {
     cmp -s "$(release_file deploy/pgw-verify-base.sh)" "$(host_path /usr/local/sbin/pgw-verify-base)" || die "pgw-verify-base checksum mismatch"
     cmp -s "$(release_file deploy/pgw-verify-ui-bind.sh)" "$(host_path /usr/local/sbin/pgw-verify-ui-bind)" || die "pgw-verify-ui-bind checksum mismatch"
     [[ "$(stat -c '%U:%G:%a' "$(host_path /var/lib/pgw)")" == pgw-api:pgw-control:750 ]] || die "invalid DB directory ownership"
-    [[ "$(stat -c '%U:%G:%a' "$(host_path /var/lib/pgw/rules)")" == pgw-agent:pgw-agent:750 ]] || die "invalid rules directory ownership"
+    [[ "$(stat -c '%U:%G:%a' "$(host_path /var/lib/pgw-agent)")" == pgw-agent:pgw-agent:750 ]] || die "invalid Agent state directory ownership"
     [[ "$(stat -c '%U:%G:%a' "$(host_path /run/pgw/forwarders)")" == pgw-agent:pgw-fwd:750 ]] || die "invalid forwarder runtime ownership"
     [[ "$(stat -c '%U:%G:%a' "${UI_ROOT}")" == pgw-ui:pgw-ui:550 ]] || die "invalid UI asset root ownership"
     cmp -s "$(release_file deploy/ui-assets.sha256)" "${UI_ROOT}/.manifest.sha256" \
