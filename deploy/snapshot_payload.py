@@ -126,6 +126,16 @@ def _json_line(payload: str, context: str) -> dict[str, Any]:
 
 
 def _run(command: list[str], context: str) -> tuple[int, dict[str, Any]]:
+    pass_fds: tuple[int, ...] = ()
+    helper = command[0]
+    descriptor_prefix = "/proc/self/fd/"
+    if helper.startswith(descriptor_prefix):
+        try:
+            descriptor = int(helper[len(descriptor_prefix):])
+            os.fstat(descriptor)
+        except (OSError, ValueError):
+            die(context + " helper descriptor is unavailable")
+        pass_fds = (descriptor,)
     result = subprocess.run(
         command,
         stdin=subprocess.DEVNULL,
@@ -133,6 +143,7 @@ def _run(command: list[str], context: str) -> tuple[int, dict[str, Any]]:
         stderr=subprocess.DEVNULL,
         text=True,
         check=False,
+        pass_fds=pass_fds,
     )
     return result.returncode, _json_line(result.stdout, context)
 
