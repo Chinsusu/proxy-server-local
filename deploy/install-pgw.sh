@@ -1886,6 +1886,19 @@ install_firewall_and_sysctl() {
     log "firewall: enabling and restarting nftables"
     systemctl enable nftables.service pgw-api.service pgw-agent.service pgw-ui.service pgw-health.service
     systemctl restart nftables.service
+    if ((!installer_sourced)); then
+        # Requires=nftables.service in the systemd-sysctl drop-in propagates
+        # this restart to systemd-sysctl.service, which reapplies
+        # ip_forward=1 from 99-pgw.conf as a concurrently queued job. Wait
+        # for that job to settle so the fail-close force-off below cannot
+        # lose the race; after_services re-enables forwarding explicitly
+        # only after full-system verification.
+        local settle_deadline=$((SECONDS + 30))
+        while systemctl list-jobs --no-legend 2>/dev/null | grep -q 'systemd-sysctl\.service'; do
+            ((SECONDS < settle_deadline)) || die "systemd-sysctl restart did not settle after nftables restart"
+            sleep 1
+        done
+    fi
     verify_base_semantics
     force_forwarding_off
 }
