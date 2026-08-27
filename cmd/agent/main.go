@@ -102,6 +102,20 @@ func loadCfg() (cfgAgent, error) {
 	}, nil
 }
 
+// fatalStartup records the structured failure and, because the structured
+// schema carries only allowlisted low-cardinality fields, also emits the
+// bounded cause on stderr so a failing start is diagnosable from the
+// journal. Startup errors never contain secrets.
+func fatalStartup(observer *observability.Observer, reason string, err error) {
+	observer.Logger.Log(context.Background(), "error", "agent_startup_failed", map[string]any{"reason_code": reason})
+	message := err.Error()
+	if len(message) > 4096 {
+		message = message[:4096]
+	}
+	fmt.Fprintf(os.Stderr, "pgw-agent: startup failed (%s): %s\n", reason, message)
+	os.Exit(1)
+}
+
 func main() {
 	if handled, err := localCommand(os.Args[1:], os.Stdout); handled {
 		if err != nil {
@@ -124,43 +138,37 @@ func main() {
 
 	cfg, err := loadCfg()
 	if err != nil {
-		observer.Logger.Log(context.Background(), "error", "agent_startup_failed", map[string]any{"reason_code": "invalid_configuration"})
-		os.Exit(1)
+		fatalStartup(observer, "invalid_configuration", err)
 	}
 	control, err := agentcore.NewHTTPControl(agentcore.HTTPControlConfig{
 		APIBase: cfg.APIBase, CredentialSocket: cfg.CredentialSocket, TokenFile: cfg.TokenFile,
 	})
 	if err != nil {
-		observer.Logger.Log(context.Background(), "error", "agent_startup_failed", map[string]any{"reason_code": "control_initialization_failed"})
-		os.Exit(1)
+		fatalStartup(observer, "control_initialization_failed", err)
 	}
 	forwarders, err := agentcore.NewRuntimeManager(agentcore.RuntimeConfig{
 		Root: cfg.RuntimeRoot, ListenHost: cfg.LANAddress, PortStart: cfg.FwdBase, PortEnd: cfg.FwdMax,
 		ReadyTimeout: cfg.ReadyTimeout, Telemetry: telemetry,
 	}, systemdCommander{binary: cfg.SystemctlBinary})
 	if err != nil {
-		observer.Logger.Log(context.Background(), "error", "agent_startup_failed", map[string]any{"reason_code": "runtime_initialization_failed"})
-		os.Exit(1)
+		fatalStartup(observer, "runtime_initialization_failed", err)
 	}
 	reconciler, err := agentcore.NewReconciler(agentcore.Config{
 		LANInterface: cfg.LANIF, WANInterface: cfg.WANIF,
 		ForwarderPortStart: cfg.FwdBase, ForwarderPortEnd: cfg.FwdMax, DrainTimeout: cfg.DrainTimeout, Telemetry: telemetry,
 	}, control, nftDataPlane{config: cfg, telemetry: telemetry}, forwarders, agentcore.FileLKGStore{Directory: cfg.LKGDirectory})
 	if err != nil {
-		observer.Logger.Log(context.Background(), "error", "agent_startup_failed", map[string]any{"reason_code": "reconciler_initialization_failed"})
-		os.Exit(1)
+		fatalStartup(observer, "reconciler_initialization_failed", err)
 	}
 	startupContext, cancelStartup := context.WithTimeout(context.Background(), 90*time.Second)
 	if err := reconciler.StartupRecover(startupContext); err != nil {
 		cancelStartup()
-		observer.Logger.Log(context.Background(), "error", "agent_startup_failed", map[string]any{"reason_code": "startup_recovery_failed"})
-		os.Exit(1)
+		fatalStartup(observer, "startup_recovery_failed", err)
 	}
 	cancelStartup()
 	authorizer, err := agentcore.NewBearerAuthenticator(cfg.TokenFile)
 	if err != nil {
-		observer.Logger.Log(context.Background(), "error", "agent_startup_failed", map[string]any{"reason_code": "trigger_auth_initialization_failed"})
-		os.Exit(1)
+		fatalStartup(observer, "trigger_auth_initialization_failed", err)
 	}
 
 	rootContext, cancelRoot := context.WithCancel(context.Background())
